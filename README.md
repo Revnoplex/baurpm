@@ -9,8 +9,8 @@ Also the code is not guaranteed to be high quality as it is just for a personal 
 
 I have uploaded this to github in case of someone wanting to use it and/or to properly develop it.
 
-## Dependancies
-The only dependancies is for python to be installed and 1 pip package: aiohttp
+## Dependencies
+The only dependencies is for python3 to be installed, probably python3.8 or later
 
 ## Usage
 Usage Layout is
