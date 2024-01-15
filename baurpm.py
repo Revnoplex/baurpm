@@ -2,7 +2,6 @@
 import datetime
 import json
 import pathlib
-import pprint
 import shutil
 import sys
 import os
@@ -11,8 +10,6 @@ from typing import Union
 import urllib.request
 import urllib.error
 import http.client
-
-import aiohttp
 
 LONG_NAME = "Basic Arch User Repository (AUR) Package Manager"
 __title__ = "baurpm"
@@ -525,7 +522,7 @@ class BAURPMCommands:
                            f"\nCompile and install the packages?"
         raw_response = input(f"{found_message} [Y/n]: ")
         if not raw_response.lower().startswith("y"):
-            pprint.pprint(package_data)
+            print("aborting...")
             return
         bases = []
         for package in package_data:
@@ -557,7 +554,7 @@ class BAURPMCommands:
                     print(f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code {viewing_failed}!")
             raw_response = input(f"Continue Installation? [Y/n]: ")
             if not raw_response.lower().startswith("y"):
-                pprint.pprint(package_data)
+                print("aborting...")
                 return
         print("Checking dependencies...")
         original_directory = os.getcwd()
