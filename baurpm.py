@@ -44,27 +44,6 @@ class UnexpectedContentType(BAURPMException):
         super().__init__(f"Expected a {self.expected_type} response, got a {self.returned_type} response instead.")
 
 
-class OldHTTPException(BAURPMException):
-    """Exception that's raised when an HTTP request operation fails.
-    Args:
-        response (ClientResponse): The aiohttp response associated with the error
-        message (str): The error message associated with the error that the RPC interface gave
-        error_data (dict): The raw error data associated with the error
-    Attributes:
-        response (ClientResponse): The aiohttp response associated with the error
-        message (str): The error message associated with the error that the RPC interface gave
-        status (int): The HTTP status code associated with the error
-        error_data (dict): The raw error data associated with the error
-        """
-    def __init__(self, response: aiohttp.ClientResponse, message: str = None, error_data: dict = None):
-        self.response = response
-        self.error_data = error_data
-        self.status = response.status
-        self.message = message
-        self.text: str = f': {message}' if message else ""
-        super().__init__(f'{self.response.status} {self.response.reason}{self.text}')
-
-
 class HTTPException(BAURPMException):
     """Exception that's raised when an HTTP request operation fails.
     Args:
@@ -84,17 +63,6 @@ class HTTPException(BAURPMException):
         self.status = response.status
         self.text: str = f': {message}' if message else ""
         super().__init__(f'{self.status} {self.response.reason}{self.text}')
-
-
-class OldAURWebRTCError(BAURPMException):
-    def __init__(self, response: aiohttp.ClientResponse, data: dict):
-        self.response = response
-        self.data = data
-        self.status = response.status
-        self.message = data.get("error")
-        self.text = self.message or ""
-        self.http_exception = f"{self.response.status} {self.response.reason}: " if self.status != 200 else ""
-        super().__init__(f"{self.http_exception}{self.text}")
 
 
 class AURWebRTCError(BAURPMException):
@@ -172,7 +140,6 @@ class BAURPMUtils:
         self.official_base_url = "https://www.archlinux.org/packages"
         self.aur_base_url = "https://aur.archlinux.org"
         self.aur_api_base_url = f"{self.aur_base_url}/rpc?v={api_version}"
-        self.old_api_timeout = aiohttp.ClientTimeout(total=api_timeout)
         self.api_timeout = api_timeout
 
     def find_official_pkg(self, package_name: str) -> Union[dict, str]:
@@ -208,40 +175,6 @@ class BAURPMUtils:
         if found_package is None:
             raise PackageNotFound([package_name])
         return found_package
-
-    async def old_find_official_pkg(self, package_name: str) -> Union[dict, str]:
-        """Fetches package info from the official database
-
-        Basic Information
-
-        Args:
-            package_name (str): The package to get the information of
-        Returns:
-            Union[dict, str]: The information of the found packages
-        Raises:
-            PackageNotFound: The api could not get information for one of the packages provided
-            HTTPException: The api experienced an error
-            UnexpectedContentType: The api returned an unexpected response
-            aiohttp.ClientError: There was a problem sending the request to the api
-        """
-
-        async def fetch(fetch_session, pkg_name: str):
-            async with fetch_session.get(f'{self.official_base_url}/search/json/?name={pkg_name}') as response:
-                if response.status >= 400:
-                    raise OldHTTPException(response)
-                if response.content_type == "application/json":
-                    response_content = await response.json()
-                    if response_content.get("results") and len(response_content["results"]) > 0:
-                        return response_content["results"][0]
-                else:
-                    print("raising error bad content")
-                    raise UnexpectedContentType("application/json", response.content_type)
-
-        async with aiohttp.ClientSession(timeout=self.old_api_timeout) as session:
-            found_package = await fetch(session, package_name)
-            if found_package is None:
-                raise PackageNotFound([package_name])
-            return found_package
 
     def find_pkg(self, package_names: list[str], ignore_missing=False):
         """Fetches package info from the aur database
@@ -288,48 +221,6 @@ class BAURPMUtils:
             else:
                 raise UnexpectedContentType("application/json", response.getheader("Content-Type"))
 
-    async def old_find_pkg(self, package_names: list[str], ignore_missing=False):
-        """Fetches package info from the aur database
-
-        Basic Information
-
-        Args:
-            package_names (list[str]): The packages to get the information of
-            ignore_missing (bool): Ignore missing packages
-        Returns:
-            list[dict]: The information of the found packages
-        Raises:
-            PackageNotFound: The api could not get information for one of the packages provided
-            AURWebRTCError: The api returned an informational error
-            HTTPException: The api experienced an error
-            UnexpectedContentType: The api returned an unexpected response
-            aiohttp.ClientError: There was a problem sending the request to the api
-        """
-        url_args = "".join(["&arg[]="+package for package in package_names])
-        async with aiohttp.ClientSession(timeout=self.old_api_timeout) as session:
-            async with session.get(f"{self.aur_api_base_url}&type=info{url_args}") as response:
-                if response.content_type == "application/json":
-                    api_data = await response.json()
-                    if response.status >= 400:
-                        if api_data["type"] == "error":
-                            raise OldAURWebRTCError(response, api_data)
-                        else:
-                            raise OldHTTPException(response, api_data)
-                    else:
-                        if api_data["type"] == "error":
-                            raise OldAURWebRTCError(response, api_data)
-                        found_packages: list[dict] = api_data["results"]
-                        found_packages_names = [package["Name"] for package in found_packages]
-                        missing_packages = list(set(package_names) - set(found_packages_names))
-                        if len(missing_packages) > 0 and not ignore_missing:
-                            raise PackageNotFound(missing_packages)
-                        else:
-                            return found_packages
-                elif response.status >= 400:
-                    raise OldHTTPException(response)
-                else:
-                    raise UnexpectedContentType("application/json", response.content_type)
-
     @staticmethod
     def speed_calc(downloaded_bytes, start_time):
         speed = bit_units(round(downloaded_bytes / (time.perf_counter() - start_time)) * 8)
@@ -347,7 +238,6 @@ class BAURPMUtils:
 
                 Raises:
                     HTTPException: The api experienced an error
-                    aiohttp.ClientError: There was a problem sending the request to the api
                     urllib.error.URLError: There was a problem sending the request to the api
                     TimeoutError: The request sent to the api timed out
                 """
@@ -381,48 +271,6 @@ class BAURPMUtils:
                           f"{datetime.timedelta(seconds=time.perf_counter() - start_time)} seconds")
                     return f"{to.absolute()}/{filename}"
 
-    async def old_download_pkg(self, url_path: str, to: pathlib.Path) -> str:
-        """Fetches package info from the aur database
-
-                Basic Information
-
-                Args:
-                    url_path (str): The path to the file of the package to download on the server
-                    to (pathlib.Path): Where to save the download
-                Returns:
-
-                Raises:
-                    HTTPException: The api experienced an error
-                    aiohttp.ClientError: There was a problem sending the request to the api
-                """
-        to.mkdir(parents=True, exist_ok=True)
-        filename = pathlib.Path(url_path).name
-        if os.path.exists(f'{to.absolute()}/{filename}'):
-            print(f"Using already downloaded {filename}")
-            return f"{to.absolute()}/{filename}"
-        async with aiohttp.ClientSession(timeout=self.old_api_timeout) as session:
-            print("\rConnecting...", end="")
-            async with session.get(f"{self.aur_base_url}{url_path}", timeout=None) as response:
-                if response.status >= 400:
-                    raise OldHTTPException(response)
-                else:
-                    print(f"\rDownloading {filename}", end="")
-                    with open(f'{to.absolute()}/{filename}', "wb") as download_file:
-                        downloaded_bytes = 0
-                        chunk_size = 2**10
-                        start_time = time.perf_counter()
-                        async for chunk in response.content.iter_chunked(chunk_size):
-                            if not chunk:
-                                break
-                            downloaded_bytes += len(chunk)
-                            download_file.write(chunk)
-                            speed = self.speed_calc(downloaded_bytes, start_time)
-                            print(f"\rDownloading {filename} {byte_units(downloaded_bytes, True).ljust(12)} at "
-                                  f"{speed}/s   ", end="")
-                        print(f"\rDownloaded {filename} {byte_units(downloaded_bytes, True)} in "
-                              f"{datetime.timedelta(seconds=time.perf_counter() - start_time)} seconds")
-                        return f"{to.absolute()}/{filename}"
-
 
 class BAURPMCommands:
     def __init__(self):
@@ -446,7 +294,8 @@ class BAURPMCommands:
         except PackageNotFound as error:
             print(error.message)
             return
-        except (AURWebRTCError, HTTPException, UnexpectedContentType, aiohttp.ClientError) as error:
+        except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
+                TimeoutError) as error:
             print(f"An error occurred while getting information on the package/s: {str(error)}")
             return
         package_names = [package["Name"] for package in package_data]
@@ -510,7 +359,8 @@ class BAURPMCommands:
             else:
                 print(error.message)
                 return
-        except (AURWebRTCError, HTTPException, UnexpectedContentType, aiohttp.ClientError) as error:
+        except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
+                TimeoutError) as error:
             print(f"An error occurred while getting information on the package/s: {str(error)}")
             return
         package_names = [package["Name"] for package in package_data]
@@ -537,7 +387,7 @@ class BAURPMCommands:
             try:
                 filename = \
                     self.utils.download_pkg(snapshot_url, pathlib.Path(f"/tmp/baurpm/cache"))
-            except (HTTPException, aiohttp.ClientError) as err:
+            except (HTTPException, urllib.error.URLError, TimeoutError) as err:
                 print(f"An error occurred while downloading the package/s: {str(err)}")
                 return
             shutil.unpack_archive(filename, f"/tmp/baurpm/")
@@ -584,7 +434,8 @@ class BAURPMCommands:
             except PackageNotFound as error:
                 print(error.message)
                 return
-            except (AURWebRTCError, HTTPException, UnexpectedContentType, aiohttp.ClientError) as error:
+            except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
+                    TimeoutError) as error:
                 print(f"An error occurred while getting information on the package/s: {str(error)}")
                 return
             package_data.extend(extended_package_data)
@@ -596,7 +447,8 @@ class BAURPMCommands:
         print(f"Checking \x1b[1m{len(depend_list)}\x1b[0m dependencies for aur dependencies")
         try:
             aur_depends = self.utils.find_pkg(list(depend_list), ignore_missing=True)
-        except (AURWebRTCError, HTTPException, UnexpectedContentType, aiohttp.ClientError) as error:
+        except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
+                TimeoutError) as error:
             print(f"An error occurred while getting information on the package/s: {str(error)}")
             return
         aur_depends_names = [aur_pkg['Name'] for aur_pkg in aur_depends]
@@ -652,14 +504,15 @@ class BAURPMCommands:
                 try:
                     dep_filename = self.utils.download_pkg(dep_snapshot_url, pathlib.Path(f"/tmp/baurpm/cache"))
                     shutil.unpack_archive(dep_filename, f"/tmp/baurpm/")
-                except (HTTPException, aiohttp.ClientError) as err:
+                except (HTTPException, urllib.error.URLError, TimeoutError) as err:
                     print(f"An error occurred while downloading the package/s: {str(err)}")
                     return
                 os.remove(dep_filename)
                 if dependency.get("Depends") is not None:
                     try:
                         aur_packages = self.utils.find_pkg(dependency["Depends"], ignore_missing=True)
-                    except (AURWebRTCError, HTTPException, UnexpectedContentType, aiohttp.ClientError) as error:
+                    except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError,
+                            urllib.error.URLError, TimeoutError) as error:
                         print(f"An error occurred while getting information on the package/s: {str(error)}")
                         return
                     aur_depends += aur_packages
@@ -730,14 +583,16 @@ class BAURPMCommands:
                     print(error.message)
                     print(f"Note: Use \x1b[1m{__title__} -Ci package-name\x1b[0m to ignore packages")
                     return
-                except (AURWebRTCError, HTTPException, UnexpectedContentType, aiohttp.ClientError) as error:
+                except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError,
+                        urllib.error.URLError, TimeoutError) as error:
                     print(f"An error occurred while getting information on the package/s: {str(error)}")
                     return
             else:
                 print(error.message)
                 print(f"Note: Use \x1b[1m{__title__} -Ci package-name\x1b[0m to ignore packages")
                 return
-        except (AURWebRTCError, HTTPException, UnexpectedContentType, aiohttp.ClientError) as error:
+        except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
+                TimeoutError) as error:
             print(f"An error occurred while getting information on the package/s: {str(error)}")
             return
         upgradable = []
@@ -838,7 +693,7 @@ if __name__ == "__main__":
             except HTTPException as e:
                 print(f"An error occurred while making a request to the server: {str(e)}")
                 exit(1)
-            except aiohttp.ClientError as e:
+            except urllib.error.URLError as e:
                 print(f"An error occurred while connecting to the server: {str(e)}")
                 exit(1)
             except Exception:
