@@ -307,39 +307,43 @@ class BAURPMCommands:
         end_selections = True
         while end_selections:
             try:
-                selected_package = 0
+                # selected_package = 0
                 if len(package_data) > 1:
-                    to_select = [f"\n{idx} - {pkg}" for idx, pkg in enumerate(package_names)]
-                    print(f"Select a package:\n"
-                          f"a - select all packages"
-                          f"{''.join(to_select)}")
-                    choice = input("[Defaults to a]: ").lower()
-                    if choice.isdecimal() and int(choice) <= len(package_names):
-                        selected_package = 0
-                    elif choice in ["a", ""]:
-                        print("placeholder")
-                    else:
-                        print("Invalid option!")
-                        continue
+                    # to_select = [f"\n{idx} - {pkg}" for idx, pkg in enumerate(package_names)]
+                    # print(f"Select a package:\n"
+                    #       f"a - select all packages"
+                    #       f"{''.join(to_select)}")
+                    # choice = input("[Defaults to a]: ").lower()
+                    # if choice.isdecimal() and int(choice) <= len(package_names):
+                    #     selected_package = 0
+                    # elif choice in ["a", ""]:
+                    #     print("not implemented")
+                    # else:
+                    #     print("Invalid option!")
+                    #     continue
+                    print("Viewing multiple packages not implemented")
+                    end_selections = False
                 else:
                     prompt = input("View information?: ")
-                    space_size = 0
-                    for name, _ in package_data[0].items():
-                        if len(name) > space_size:
-                            space_size = len(name)
-                    output = ""
-                    for name, value in package_data[0].items():
-                        if isinstance(value, list):
-                            value = ", ".join(value)
-                        if name in ["FirstSubmitted", "LastModified"]:
-                            vtime = datetime.datetime.fromtimestamp(value if isinstance(value, (int, float)) else 0)
-                            value = vtime.strftime(f"%A, %B %d %Y, %H:%M:%S (local time)")
-                        output += f'\n{name}:{"".join([" " for _ in range(space_size + 4 - len(name))])}{value}'
-                    display_failed = os.system(f'echo "{output}" | less') >> 8
-                    if display_failed:
-                        print(f"\033[1;31mFatal\033[0m: Failed to display package info with exit code "
-                              f"{display_failed}!")
-                        return
+                    if prompt.lower().startswith("y"):
+                        space_size = 0
+                        for name, _ in package_data[0].items():
+                            if len(name) > space_size:
+                                space_size = len(name)
+                        output = ""
+                        for name, value in package_data[0].items():
+                            if isinstance(value, list):
+                                value = ", ".join(value)
+                            if name in ["FirstSubmitted", "LastModified"]:
+                                vtime = datetime.datetime.fromtimestamp(value if isinstance(value, (int, float)) else 0)
+                                value = vtime.strftime(f"%A, %B %d %Y, %H:%M:%S (local time)")
+                            output += f'\n{name}:{"".join([" " for _ in range(space_size + 4 - len(name))])}{value}'
+                        display_failed = os.system(f'echo "{output}" | less') >> 8
+                        if display_failed:
+                            print(f"\033[1;31mFatal\033[0m: Failed to display package info with exit code "
+                                  f"{display_failed}!")
+                            return
+                    end_selections = False
             except (KeyboardInterrupt, EOFError, SystemExit):
                 print()
                 end_selections = False
