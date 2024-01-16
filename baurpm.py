@@ -279,18 +279,33 @@ class BAURPMCommands:
         self.utils = BAURPMUtils()
 
     def command_h(self, *args):
-        """displays this message"""
+        """displays this message
+        
+        Usage:
+            {name} [command-name]
+        Options:
+            None
+        """
         raw_class = dir(self)
         cmds = [obj for obj in raw_class if not obj.startswith('__')]
-        print("here is a list of executable commands:")
+        print(f"Usage: {__title__} [command][options] [arguments]")
+        print("Executable commands:")
         for cmd in cmds:
             cmd_attr = getattr(self, cmd)
             if callable(cmd_attr):
-                doc = cmd_attr.__doc__
-                print(f' -{cmd[-1].upper()}\t{doc}')
+                doc = cmd_attr.__doc__.replace("\n\n", "\n").splitlines()
+                description = doc[0]
+                print(f' -{cmd[-1].upper()}\t{description}')
+        print(f"use {__title__} -H [command-name] for help with that command")
 
     def command_g(self, *args):
-        """Get info on an AUR package"""
+        """Get info on an AUR package
+
+        Usage:
+            {name} [package]
+        Options:
+            None
+        """
         try:
             package_data = self.utils.find_pkg(args[1])
         except PackageNotFound as error:
@@ -372,7 +387,14 @@ class BAURPMCommands:
                 end_selections = False
 
     def command_i(self, *args):
-        """Install an AUR package without keeping the download"""
+        """Install an AUR package without keeping the download
+
+        Usage:
+            {name}[options] [package(s)]
+        Options:
+            f: Ignore any missing packages
+            n: Skip Reading PKGBUILD files
+        """
         try:
             package_data = self.utils.find_pkg(args[1])
         except PackageNotFound as error:
@@ -419,7 +441,7 @@ class BAURPMCommands:
                 return
             shutil.unpack_archive(filename, f"/tmp/baurpm/")
         if "n" not in args[0]:
-            print(f"Note: pass the n argument to skip reading PKGBUILDs. eg: {sys.argv[0]} -In package_name")
+            print(f"Note: pass the n argument to skip reading PKGBUILD files. eg: {sys.argv[0]} -In package_name")
             for package in package_data:
                 package_name = package["PackageBase"]
                 print(f"Build files for \033[1m{package_name}\033[0m are:"
@@ -581,7 +603,16 @@ class BAURPMCommands:
         print("Done!")
 
     def command_c(self, *args):
-        """Check for newer versions of installed packages"""
+        """Check for newer versions of installed packages
+
+        Usage:
+            {name}[options] [arguments]
+        Options:
+            i, <packages>: Ignore upgrading packages specified
+            f: Ignore any missing packages
+            s: Skip running pacman -Syu
+            k: Upgrade archlinux-keyring first
+        """
         print("Checking for newer versions of AUR packages...")
         qm_command = os.popen("pacman -Qm")
         qm_output = qm_command.read().splitlines()
@@ -695,7 +726,8 @@ if __name__ == "__main__":
     print(f"{LONG_NAME} {__version__}\n{__copyright__}")
 
     if len(sys.argv) < 2:
-        print(f"No commands provided!\nUsage: {__title__} [command] [options]\nSee {__title__} help for details")
+        print(f"No commands provided!\nUsage: {__title__} [command][options] [arguments]\nSee {__title__} help for "
+              f"details")
         exit(1)
 
     command_arg = sys.argv[1]
