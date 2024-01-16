@@ -243,16 +243,17 @@ class BAURPMUtils:
                 """
         to.mkdir(parents=True, exist_ok=True)
         filename = pathlib.Path(url_path).name
+        api_netloc = self.aur_base_url.replace('/', '').replace('https:', '')
         if os.path.exists(f'{to.absolute()}/{filename}'):
             print(f"Using already downloaded {filename}")
             return f"{to.absolute()}/{filename}"
-        print("\rConnecting...", end="")
-        with urllib.request.urlopen(f"{self.aur_base_url}{url_path}", timeout=self.api_timeout) as response:
+        print(f"\rConnecting to {api_netloc}", end="")
+        with urllib.request.urlopen(self.aur_base_url + url_path, timeout=self.api_timeout) as response:
             response: http.client.HTTPResponse
             if response.status >= 400:
                 raise HTTPException(response)
             else:
-                print(f"\rDownloading {filename}", end="")
+                print(f"\rDownloading {filename} from {api_netloc}", end="")
                 with open(f'{to.absolute()}/{filename}', "wb") as download_file:
                     downloaded_bytes = 0
                     chunk_size = 2 ** 10
@@ -265,10 +266,11 @@ class BAURPMUtils:
                         download_file.write(chunk)
                         del chunk
                         speed = self.speed_calc(downloaded_bytes, start_time)
-                        print(f"\rDownloading {filename} {byte_units(downloaded_bytes, True).ljust(12)} at "
-                              f"{speed}/s   ", end="")
-                    print(f"\rDownloaded {filename} {byte_units(downloaded_bytes, True)} in "
-                          f"{datetime.timedelta(seconds=time.perf_counter() - start_time)} seconds")
+                        print(f"\rDownloading {filename} ({byte_units(downloaded_bytes, True).ljust(12)})"
+                              f" from {api_netloc} at {speed}/s   ", end="")
+                    print(f"\rDownloaded {filename} ({byte_units(downloaded_bytes, True)}) from "
+                          f"{api_netloc} in {datetime.timedelta(seconds=time.perf_counter() - start_time)} "
+                          f"seconds")
                     return f"{to.absolute()}/{filename}"
 
 
@@ -324,7 +326,7 @@ class BAURPMCommands:
                     print("Viewing multiple packages not implemented")
                     end_selections = False
                 else:
-                    prompt = input("View information?: ")
+                    prompt = input("View information? [y/n]: ")
                     if prompt.lower().startswith("y"):
                         space_size = 0
                         for name, _ in package_data[0].items():
@@ -338,11 +340,32 @@ class BAURPMCommands:
                                 vtime = datetime.datetime.fromtimestamp(value if isinstance(value, (int, float)) else 0)
                                 value = vtime.strftime(f"%A, %B %d %Y, %H:%M:%S (local time)")
                             output += f'\n{name}:{"".join([" " for _ in range(space_size + 4 - len(name))])}{value}'
-                        display_failed = os.system(f'echo "{output}" | less') >> 8
-                        if display_failed:
-                            print(f"\033[1;31mFatal\033[0m: Failed to display package info with exit code "
-                                  f"{display_failed}!")
-                            return
+                        print(output)
+                        prompt = input("Download and view build files and PKGBUILD? [y/n]: ")
+                        if prompt.lower().startswith("y"):
+                            package = package_data[0]
+                            snapshot_url: str = package["URLPath"]
+                            snapshot_url = f'{pathlib.Path(snapshot_url).parents[0]}/{package["PackageBase"]}' \
+                                           f'{"".join(pathlib.Path(snapshot_url).suffixes)}'
+                            try:
+                                filename = \
+                                    self.utils.download_pkg(snapshot_url, pathlib.Path(f"/tmp/baurpm/cache"))
+                            except (HTTPException, urllib.error.URLError, TimeoutError) as err:
+                                print(f"An error occurred while downloading the package/s: {str(err)}")
+                                return
+                            shutil.unpack_archive(filename, f"/tmp/baurpm/")
+                            package_name = package["PackageBase"]
+                            print(f"Build files for \033[1m{package_name}\033[0m are:"
+                                  f"\n     {' '.join(os.listdir(f'/tmp/baurpm/{package_name}'))}")
+                            input("Press Enter to continue and view PKGBUILD")
+                            viewing_failed = os.system(f"less /tmp/baurpm/{package_name}/PKGBUILD") >> 8
+                            if viewing_failed:
+                                print(f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code "
+                                      f"{viewing_failed}!")
+                            deletion_failed = os.system("rm -rf /tmp/baurpm") >> 8
+                            if deletion_failed:
+                                print(f"\033[1;31mFatal\033[0m: Deleting build files failed with exit code "
+                                      f"{deletion_failed}!")
                     end_selections = False
             except (KeyboardInterrupt, EOFError, SystemExit):
                 print()
