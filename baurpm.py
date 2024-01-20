@@ -464,7 +464,11 @@ class BAURPMCommands:
                 fetched_bases.append(package["PackageBase"])
                 print(f"Fetching info on dependencies for package base \x1b[1m{package['PackageBase']}\x1b[0m...")
                 os.chdir(f"/tmp/baurpm/{package['PackageBase']}")
-                makepkg_info_cmd = os.popen("makepkg --printsrcinfo")
+                if os.getuid() == 0:
+                    shutil.chown(os.getcwd(), os.getenv('SUDO_USER') or 'nobody')
+                    makepkg_info_cmd = os.popen(f"sudo -u {os.getenv('SUDO_USER') or 'nobody'} makepkg --printsrcinfo")
+                else:
+                    makepkg_info_cmd = os.popen("makepkg --printsrcinfo")
                 makepkg_info = makepkg_info_cmd.read().splitlines()
                 makepkg_info_failed = (makepkg_info_cmd.close() or 255) >> 8
                 if makepkg_info_failed:
@@ -575,7 +579,11 @@ class BAURPMCommands:
                 else:
                     print(f"Compiling \033[1m{package_name}\033[0m")
                 os.chdir(f'/tmp/baurpm/{package_name}')
-                compilation_failed = os.system("makepkg -s") >> 8
+                if os.getuid() == 0:
+                    shutil.chown(os.getcwd(), os.getenv('SUDO_USER') or 'nobody')
+                    compilation_failed = os.system(f"sudo -u {os.getenv('SUDO_USER') or 'nobody'} makepkg -s") >> 8
+                else:
+                    compilation_failed = os.system("makepkg -s") >> 8
                 if compilation_failed and compilation_failed != 13:
                     print(f"\033[1;31mFatal\033[0m: Compiling process failed with exit code {compilation_failed}!")
                     return
@@ -591,7 +599,10 @@ class BAURPMCommands:
                         package_paths.append(f'/tmp/baurpm/{package_name}/{build_file}')
                         already_listed.append(package_name)
         print(f"Installing {len(package_paths)} packages...")
-        install_failed = os.system(f"sudo pacman -U {' '.join(package_paths)}") >> 8
+        if os.getuid() == 0:
+            install_failed = os.system(f"pacman -U {' '.join(package_paths)}") >> 8
+        else:
+            install_failed = os.system(f"sudo pacman -U {' '.join(package_paths)}") >> 8
         if install_failed:
             print(f"\033[1;31mFatal\033[0m: Installing process failed with exit code {install_failed}!")
             return
@@ -674,7 +685,10 @@ class BAURPMCommands:
                       f"by passing the k argument: eg: {sys.argv[0]} -Ck package_name")
                 if "k" in args[0]:
                     print("Attempting to upgrade archlinux-keyring first to prevent signature errors...")
-                    keyring_update_failed = os.system("sudo pacman -Sy archlinux-keyring") >> 8
+                    if os.getuid() == 0:
+                        keyring_update_failed = os.system("pacman -Sy archlinux-keyring") >> 8
+                    else:
+                        keyring_update_failed = os.system("sudo pacman -Sy archlinux-keyring") >> 8
                     if keyring_update_failed:
                         print("Failed to upgrade archlinux-keyring.")
                     else:
@@ -683,7 +697,10 @@ class BAURPMCommands:
                           "words "
                           "aborting now and not fully upgrading with pacman -Syu may leave your system in a "
                           "broken state! So please let it run or do it manually")
-                upgrade_failed = os.system("sudo pacman -Syu") >> 8
+                if os.getuid() == 0:
+                    upgrade_failed = os.system("pacman -Syu") >> 8
+                else:
+                    upgrade_failed = os.system("sudo pacman -Syu") >> 8
                 if upgrade_failed:
                     print(f"\033[1;31mFatal\033[0m: pacman -Syu failed with exit code {upgrade_failed}!")
                     return
