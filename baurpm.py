@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import datetime
+import inspect
 import json
 import pathlib
 import shutil
@@ -288,15 +289,32 @@ class BAURPMCommands:
         """
         raw_class = dir(self)
         cmds = [obj for obj in raw_class if not obj.startswith('__')]
-        print(f"Usage: {__title__} [command][options] [arguments]")
-        print("Executable commands:")
-        for cmd in cmds:
-            cmd_attr = getattr(self, cmd)
-            if callable(cmd_attr):
-                doc = cmd_attr.__doc__.replace("\n\n", "\n").splitlines()
-                description = doc[0]
-                print(f' -{cmd[-1].upper()}\t{description}')
-        print(f"use {__title__} -H [command-name] for help with that command")
+        if args[1]:
+            found_command = None
+            for cmd in cmds:
+                if cmd.startswith('command_') and cmd[-1] == args[1][0].lower():
+                    found_command = getattr(self, cmd)
+            if found_command:
+                cmd_letter = found_command.__name__[-1].upper()
+                if found_command.__doc__:
+                    clean_doc = "\n".join([line for line in inspect.cleandoc(found_command.__doc__).splitlines() if line])
+                    print(f"{cmd_letter}: " + clean_doc.format(name=f"baurpm -{cmd_letter}"))
+                    if len(clean_doc.splitlines()) < 2:
+                        print("No usage or options are documented for this command")
+                else:
+                    print(f"{cmd_letter}: **No Documentation**")
+            else:
+                print(f"No command by the name of {args[1][0]}")
+        else:
+            print(f"Usage: {__title__} [command][options] [arguments]")
+            print("Executable commands:")
+            for cmd in cmds:
+                cmd_attr = getattr(self, cmd)
+                if callable(cmd_attr):
+                    doc = (cmd_attr.__doc__ or "**No Description**").replace("\n\n", "\n").splitlines()
+                    description = doc[0] or "**No Description**"
+                    print(f' -{cmd[-1].upper()}\t{description}')
+            print(f"use {__title__} -H [command-name] for help with that command")
 
     def command_g(self, *args):
         """Get info on an AUR package
