@@ -22,4 +22,9 @@ To install a Package
 ```sh
 ./baurpm.py -I package-name
 ```
+To upgrade installed aur packages
+```sh
+./baurpm.py -C
+```
+
 See `./baurpm.py -H` for more
