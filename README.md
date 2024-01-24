@@ -13,6 +13,8 @@ I have uploaded this to GitHub in case of someone wanting to use it and/or to pr
 - python 3.8 or later
 - sudo
 
+This is an AUR Helper so this will only run on arch based systems.
+
 ## Usage
 Usage Layout is
 ```sh
