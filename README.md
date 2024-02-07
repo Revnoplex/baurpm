@@ -29,4 +29,4 @@ To upgrade installed aur packages
 ./baurpm.py -C
 ```
 
-See `./baurpm.py -H` for more
+See `./baurpm.py -H` for more commands and usage
