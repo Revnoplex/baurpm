@@ -297,7 +297,9 @@ class BAURPMCommands:
             if found_command:
                 cmd_letter = found_command.__name__[-1].upper()
                 if found_command.__doc__:
-                    clean_doc = "\n".join([line for line in inspect.cleandoc(found_command.__doc__).splitlines() if line])
+                    clean_doc = "\n".join(
+                        [line for line in inspect.cleandoc(found_command.__doc__).splitlines() if line]
+                    )
                     print(f"{cmd_letter}: " + clean_doc.format(name=f"baurpm -{cmd_letter}"))
                     if len(clean_doc.splitlines()) < 2:
                         print("No usage or options are documented for this command")
@@ -515,13 +517,17 @@ class BAURPMCommands:
         for package in package_data:
             if package.get("Depends") is not None:
                 depend_list.update(package.get("Depends"))
-        print(f"Checking \x1b[1m{len(depend_list)}\x1b[0m dependencies for aur dependencies")
-        try:
-            aur_depends = self.utils.find_pkg(list(depend_list), ignore_missing=True)
-        except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
-                TimeoutError) as error:
-            print(f"An error occurred while getting information on the package/s: {str(error)}")
-            return
+            if package.get("MakeDepends") is not None:
+                depend_list.update(package.get("MakeDepends"))
+        aur_depends = []
+        if len(depend_list) > 0:
+            print(f"Checking \x1b[1m{len(depend_list)}\x1b[0m dependencies for aur dependencies")
+            try:
+                aur_depends = self.utils.find_pkg(list(depend_list), ignore_missing=True)
+            except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
+                    TimeoutError) as error:
+                print(f"An error occurred while getting information on the package/s: {str(error)}")
+                return
         aur_depends_names = [aur_pkg['Name'] for aur_pkg in aur_depends]
         if len(aur_depends) > 0:
             print(f"The following aur dependencies will be installed:\n    {' '.join(aur_depends_names)}"
