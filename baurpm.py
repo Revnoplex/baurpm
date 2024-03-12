@@ -744,6 +744,13 @@ class BAURPMCommands:
             else:
                 if installed_version.strip() != running_version.replace("-", ".", 1).strip():
                     print("The linux kernel has been upgraded and you will need to reboot the system to use it.")
+                    raw_response = input(f"Reboot now? [y/N]: ")
+                    if raw_response.lower().startswith("y"):
+                        reboot_failed = os.system("sudo reboot") >> 8
+                        if reboot_failed:
+                            print("Reboot command failed, you will need to rebot manually")
+                        else:
+                            print("Rebooting...")
         else:
             print("\x1b[1mAll installed AUR packages are up to date\x1b[0m")
 
