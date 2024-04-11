@@ -680,6 +680,22 @@ class BAURPMCommands:
                         urllib.error.URLError, TimeoutError) as error:
                     print(f"An error occurred while getting information on the package/s: {str(error)}")
                     return
+            elif all(package.endswith("-debug") for package in error.missing_packages):
+                print(
+                    f"\033[1;33mWarning\033[0m: Couldn't find the following debug packages in the aur: "
+                    f"{', '.join(error.missing_packages)}"
+                )
+                stripped_packages = [package for package in installed_names if package not in error.missing_packages]
+                try:
+                    package_data = self.utils.find_pkg(stripped_packages)
+                except PackageNotFound as error:
+                    print(error.message)
+                    print(f"Note: Use \x1b[1m{__title__} -Ci package-name\x1b[0m to ignore packages")
+                    return
+                except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError,
+                        urllib.error.URLError, TimeoutError) as error:
+                    print(f"An error occurred while getting information on the package/s: {str(error)}")
+                    return
             else:
                 print(error.message)
                 print(f"Note: Use \x1b[1m{__title__} -Ci package-name\x1b[0m to ignore packages")
@@ -699,7 +715,6 @@ class BAURPMCommands:
                 print("aborting...")
                 return
             print("It is recommended to run pacman -Syu before upgrading these packages")
-            # raw_response = input("Run pacman -Syu? [Y/n]: ")
             print(f"Note: pass the s argument to skip running running pacman -Syu ("
                   f"NOT RECOMMENDED unless you have already done so). "
                   f"eg: {sys.argv[0]} -Cs package_name")
