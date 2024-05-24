@@ -599,9 +599,9 @@ class BAURPMCommands:
             to_install_packages = set([to_install["PackageBase"] for to_install in package_data])
             if package_name not in built_pkgs:
                 if len(to_install_packages) > 1:
-                    print(f"Compiling Package {idx+1}/{len(to_install_packages)}: \033[1m{package_name}\033[0m")
+                    print(f"Making Package {idx+1}/{len(to_install_packages)}: \033[1m{package_name}\033[0m")
                 else:
-                    print(f"Compiling \033[1m{package_name}\033[0m")
+                    print(f"Making \033[1m{package_name}\033[0m")
                 os.chdir(f'/tmp/baurpm/{package_name}')
                 if os.getuid() == 0:
                     shutil.chown(os.getcwd(), os.getenv('SUDO_USER') or 'nobody')
@@ -609,7 +609,7 @@ class BAURPMCommands:
                 else:
                     compilation_failed = os.system("makepkg -s") >> 8
                 if compilation_failed and compilation_failed != 13:
-                    print(f"\033[1;31mFatal\033[0m: Compiling process failed with exit code {compilation_failed}!")
+                    print(f"\033[1;31mFatal\033[0m: makepkg process failed with exit code {compilation_failed}!")
                     return
                 built_pkgs.append(package["PackageBase"])
         os.chdir(original_directory)
