@@ -435,10 +435,10 @@ class BAURPMCommands:
         package_names = [package["Name"] for package in package_data]
         if len(package_names) < 2:
             found_message = f"A package called \033[1m{package_names[0]}\033[0m was found." \
-                            f"\nCompile and install the package?"
+                            f"\nMake and install the package?"
         else:
             found_message = f"Some packages called \033[1m{', '.join(package_names)}\033[0m were found." \
-                           f"\nCompile and install the packages?"
+                           f"\nMake and install the packages?"
         raw_response = input(f"{found_message} [Y/n]: ")
         if not raw_response.lower().startswith("y"):
             print("aborting...")
