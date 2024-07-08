@@ -750,7 +750,7 @@ class BAURPMCommands:
             self.command_i(args[0], upgradable)
             after_mod_times = self.utils.fetch_initramfs_mod_times()
             initramfs_image_updated = False
-            for key, value in after_mod_times:
+            for key, value in after_mod_times.items():
                 if before_mod_times[key] != value:
                     initramfs_image_updated = True
             if initramfs_image_updated:
