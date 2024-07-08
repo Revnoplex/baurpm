@@ -274,6 +274,23 @@ class BAURPMUtils:
                           f"seconds")
                     return f"{to.absolute()}/{filename}"
 
+    @staticmethod
+    def fetch_initramfs_mod_times() -> dict[str, float] | dict:
+        mod_times = {}
+        for module in pathlib.Path("/usr/lib/modules/").glob("*/pkgbase"):
+            with open(module, "r") as preset_name_file:
+                preset_name = preset_name_file.read().strip()
+            with open(f"/etc/mkinitcpio.d/{preset_name}.preset") as presets_file:
+                preset_names = []
+                for line in presets_file.read().splitlines():
+                    if line.lower().startswith("presets="):
+                        for preset in line.split("=")[1].strip("()").split(" "):
+                            preset_names.append(preset.strip("'\""))
+                    if line.split("_image=")[0] in preset_names:
+                        image_path = line.split("_image=")[1].strip("'\"")
+                        mod_times[image_path] = os.stat(image_path).st_mtime
+        return mod_times
+
 
 class BAURPMCommands:
     def __init__(self):
@@ -718,6 +735,7 @@ class BAURPMCommands:
             print(f"Note: pass the s argument to skip running running pacman -Syu ("
                   f"NOT RECOMMENDED unless you have already done so). "
                   f"eg: {sys.argv[0]} -Cs package_name")
+            before_mod_times = self.utils.fetch_initramfs_mod_times()
             if "s" not in args[0]:
                 # raw_response = input("Update archlinux-keyring first? [y/N]: ")
                 print("Note: If you run into package signature errors, try upgrading the archlinux-keyring"
@@ -744,28 +762,20 @@ class BAURPMCommands:
                     print(f"\033[1;31mFatal\033[0m: pacman -Syu failed with exit code {upgrade_failed}!")
                     return
             self.command_i(args[0], upgradable)
-            installed_version_cmd = os.popen("pacman -Q linux")
-            installed_version = installed_version_cmd.read().split()[1]
-            installed_version_failed = (installed_version_cmd.close() or 255) >> 8
-            running_version_cmd = os.popen("uname -r")
-            running_version = running_version_cmd.read()
-            running_version_failed = (running_version_cmd.close() or 255) >> 8
-            if installed_version_failed or running_version_failed:
-                print(f"\033[1;33mWarning\033[0m: Unable to check the kernel version to see if a reboot is "
-                      f"required")
-                for cmd in ("installed", installed_version_failed), ("running", running_version_failed):
-                    if cmd[1]:
-                        print(f"Fetching {cmd[0]} failed with exit code {cmd[1]}")
-            else:
-                if installed_version.strip() != running_version.replace("-", ".", 1).strip():
-                    print("The linux kernel has been upgraded and you will need to reboot the system to use it.")
-                    raw_response = input(f"Reboot now? [y/N]: ")
-                    if raw_response.lower().startswith("y"):
-                        reboot_failed = os.system("sudo reboot") >> 8
-                        if reboot_failed:
-                            print("Reboot command failed, you will need to rebot manually")
-                        else:
-                            print("Rebooting...")
+            after_mod_times = self.utils.fetch_initramfs_mod_times()
+            initramfs_image_updated = False
+            for key, value in after_mod_times:
+                if before_mod_times[key] != value:
+                    initramfs_image_updated = True
+            if initramfs_image_updated:
+                print("The initramfs has been updated and you will need to reboot the system to use some new software.")
+                raw_response = input(f"Reboot now? [y/N]: ")
+                if raw_response.lower().startswith("y"):
+                    reboot_failed = os.system("sudo reboot") >> 8
+                    if reboot_failed:
+                        print("Reboot command failed, you will need to rebot manually")
+                    else:
+                        print("Rebooting...")
         else:
             print("\x1b[1mAll installed AUR packages are up to date\x1b[0m")
 
