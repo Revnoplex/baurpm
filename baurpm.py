@@ -679,6 +679,8 @@ class BAURPMCommands:
             if "i" in args[0] and pkg in args[1]:
                 print(f"Ignoring specified package: {pkg}")
                 continue
+            if pkg.endswith("-debug"):
+                continue
             installed_names.append(pkg)
             installed_versions[pkg] = version
         print(f"Checking {len(installed_names)} AUR packages...")
@@ -687,22 +689,6 @@ class BAURPMCommands:
         except PackageNotFound as error:
             if "f" in args[0]:
                 stripped_packages = [raw_pkg for raw_pkg in installed_names if raw_pkg not in error.missing_packages]
-                try:
-                    package_data = self.utils.find_pkg(stripped_packages)
-                except PackageNotFound as error:
-                    print(error.message)
-                    print(f"Note: Use \x1b[1m{__title__} -Ci package-name\x1b[0m to ignore packages")
-                    return
-                except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError,
-                        urllib.error.URLError, TimeoutError) as error:
-                    print(f"An error occurred while getting information on the package/s: {str(error)}")
-                    return
-            elif all(package.endswith("-debug") for package in error.missing_packages):
-                print(
-                    f"\033[1;33mWarning\033[0m: Couldn't find the following debug packages in the aur: "
-                    f"{', '.join(error.missing_packages)}"
-                )
-                stripped_packages = [package for package in installed_names if package not in error.missing_packages]
                 try:
                     package_data = self.utils.find_pkg(stripped_packages)
                 except PackageNotFound as error:
