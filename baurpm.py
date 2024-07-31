@@ -755,8 +755,13 @@ class BAURPMCommands:
                     initramfs_image_updated = True
             if initramfs_image_updated:
                 print("The initramfs has been updated and you will need to reboot the system to use some new software.")
-                raw_response = input(f"Reboot now? [y/N]: ")
-                if raw_response.lower().startswith("y"):
+                print("Do you want to restart now?")
+                print(
+                    "Type \x1b[1mYes\x1b[0m to reboot. \n\x1b[1;31m"
+                    "WARNING: typing Yes will reboot your computer! Any unsaved work will be lost!\x1b[0m"
+                )
+                raw_response = input(f" ?]: ")
+                if raw_response == "Yes":
                     reboot_failed = os.system("sudo reboot") >> 8
                     if reboot_failed:
                         print("Reboot command failed, you will need to rebot manually")
