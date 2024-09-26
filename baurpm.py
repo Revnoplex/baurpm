@@ -361,31 +361,15 @@ class BAURPMCommands:
         end_selections = True
         while end_selections:
             try:
-                # selected_package = 0
-                if len(package_data) > 1:
-                    # to_select = [f"\n{idx} - {pkg}" for idx, pkg in enumerate(package_names)]
-                    # print(f"Select a package:\n"
-                    #       f"a - select all packages"
-                    #       f"{''.join(to_select)}")
-                    # choice = input("[Defaults to a]: ").lower()
-                    # if choice.isdecimal() and int(choice) <= len(package_names):
-                    #     selected_package = 0
-                    # elif choice in ["a", ""]:
-                    #     print("not implemented")
-                    # else:
-                    #     print("Invalid option!")
-                    #     continue
-                    print("Viewing multiple packages not implemented")
-                    end_selections = False
-                else:
-                    prompt = input("View information? [y/n]: ")
+                for package in package_data:
+                    prompt = input(f"View information for {package['Name']}? [y/n]: ")
                     if prompt.lower().startswith("y"):
                         space_size = 0
-                        for name, _ in package_data[0].items():
+                        for name, _ in package.items():
                             if len(name) > space_size:
                                 space_size = len(name)
                         output = ""
-                        for name, value in package_data[0].items():
+                        for name, value in package.items():
                             if isinstance(value, list):
                                 value = ", ".join(value)
                             if name in ["FirstSubmitted", "LastModified"]:
@@ -395,7 +379,6 @@ class BAURPMCommands:
                         print(output)
                         prompt = input("Download and view build files and PKGBUILD? [y/n]: ")
                         if prompt.lower().startswith("y"):
-                            package = package_data[0]
                             snapshot_url: str = package["URLPath"]
                             snapshot_url = f'{pathlib.Path(snapshot_url).parents[0]}/{package["PackageBase"]}' \
                                            f'{"".join(pathlib.Path(snapshot_url).suffixes)}'
