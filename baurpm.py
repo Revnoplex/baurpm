@@ -433,7 +433,7 @@ class BAURPMCommands:
                 print()
                 end_selections = False
 
-    def command_i(self, *args):
+    def command_i(self, *args, **kwargs):
         """Install an AUR package without keeping the download
 
         Usage:
@@ -442,35 +442,39 @@ class BAURPMCommands:
             f: Ignore any missing packages
             n: Skip Reading PKGBUILD files
         """
-        print(f"Searching for \x1b[1m{', '.join(args[1])}\x1b[0m")
-        try:
-            package_data = self.utils.find_pkg(args[1])
-        except PackageNotFound as error:
-            if "f" in args[0]:
-                stripped_packages = [raw_pkg for raw_pkg in args[1] if raw_pkg not in error.missing_packages]
-                try:
-                    package_data = self.utils.find_pkg(stripped_packages)
-                except PackageNotFound as error:
+        if not kwargs.get('package_data'):
+            print(f"Searching for \x1b[1m{', '.join(args[1])}\x1b[0m")
+            try:
+                package_data = self.utils.find_pkg(args[1])
+            except PackageNotFound as error:
+                if "f" in args[0]:
+                    stripped_packages = [raw_pkg for raw_pkg in args[1] if raw_pkg not in error.missing_packages]
+                    try:
+                        package_data = self.utils.find_pkg(stripped_packages)
+                    except PackageNotFound as error:
+                        print(error.message)
+                        return
+                else:
                     print(error.message)
                     return
-            else:
-                print(error.message)
+            except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
+                    TimeoutError) as error:
+                print(f"An error occurred while getting information on the package/s: {str(error)}")
                 return
-        except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
-                TimeoutError) as error:
-            print(f"An error occurred while getting information on the package/s: {str(error)}")
-            return
-        package_names = [package["Name"] for package in package_data]
-        if len(package_names) < 2:
-            found_message = f"A package called \033[1m{package_names[0]}\033[0m was found." \
-                            f"\nMake and install the package?"
+            package_names = [package["Name"] for package in package_data]
+            if len(package_names) < 2:
+                found_message = f"A package called \033[1m{package_names[0]}\033[0m was found." \
+                                f"\nMake and install the package?"
+            else:
+                found_message = f"Some packages called \033[1m{', '.join(package_names)}\033[0m were found." \
+                               f"\nMake and install the packages?"
+            raw_response = input(f"{found_message} [Y/n]: ")
+            if not raw_response.lower().startswith("y"):
+                print("aborting...")
+                return
         else:
-            found_message = f"Some packages called \033[1m{', '.join(package_names)}\033[0m were found." \
-                           f"\nMake and install the packages?"
-        raw_response = input(f"{found_message} [Y/n]: ")
-        if not raw_response.lower().startswith("y"):
-            print("aborting...")
-            return
+            package_data = kwargs["package_data"]
+            package_names = [package["Name"] for package in package_data]
         bases = []
         for package in package_data:
             snapshot_url: str = package["URLPath"]
@@ -633,10 +637,10 @@ class BAURPMCommands:
                 os.chdir(f'/tmp/baurpm/{package_name}')
                 if os.getuid() == 0:
                     shutil.chown(os.getcwd(), os.getenv('SUDO_USER') or 'nobody')
-                    compilation_failed = os.system(f"sudo -u {os.getenv('SUDO_USER') or 'nobody'} makepkg -s") >> 8
+                    compilation_failed = os.system(f"sudo -u {os.getenv('SUDO_USER') or 'nobody'} makepkg -sf") >> 8
                 else:
-                    compilation_failed = os.system("makepkg -s") >> 8
-                if compilation_failed and compilation_failed != 13:
+                    compilation_failed = os.system("makepkg -sf") >> 8
+                if compilation_failed:
                     print(f"\033[1;31mFatal\033[0m: makepkg process failed with exit code {compilation_failed}!")
                     return
                 built_pkgs.append(package["PackageBase"])
@@ -758,7 +762,7 @@ class BAURPMCommands:
                 if upgrade_failed:
                     print(f"\033[1;31mFatal\033[0m: pacman -Syu failed with exit code {upgrade_failed}!")
                     return
-            self.command_i(args[0], upgradable)
+            self.command_i(args[0], upgradable, package_data=package_data)
             after_mod_times = self.utils.fetch_initramfs_mod_times()
             initramfs_image_updated = False
             for key, value in after_mod_times.items():
@@ -783,45 +787,152 @@ class BAURPMCommands:
 
     def command_u(self, *args):
         """Upgrade packages that have been downloaded in ~/stored-aur-packages (not yet implemented)"""
-        print("not implemented")
-
-    def command_v(self, *args):
-        """"""
-        print("not implemented")
-
-    def command_a(self, *args):
-        """
-        install a package by adding it to the ~/stored-aur-packages directory and installing it (not yet implemented)
-        """
-        print(f"Searching for \x1b[1m{', '.join(args[1])}\x1b[0m")
+        print("Checking for newer versions of AUR packages...")
+        qm_command = os.popen("pacman -Qm")
+        qm_output = qm_command.read().splitlines()
+        qm_failed = (qm_command.close() or 255) >> 8
+        if qm_failed:
+            print(f"\033[1;31mFatal\033[0m: Fetching installed aur packages failed with exit code {qm_failed}!")
+            return
+        installed = [line.split(" ") for line in qm_output]
+        installed_names = []
+        installed_versions = {}
+        for pkg, version in installed:
+            if "i" in args[0] and pkg in args[1]:
+                print(f"Ignoring specified package: {pkg}")
+                continue
+            if pkg.endswith("-debug"):
+                continue
+            installed_names.append(pkg)
+            installed_versions[pkg] = version
+        print(f"Checking {len(installed_names)} AUR packages...")
         try:
-            package_data = self.utils.find_pkg(args[1])
+            package_data = self.utils.find_pkg(installed_names)
         except PackageNotFound as error:
             if "f" in args[0]:
-                stripped_packages = [raw_pkg for raw_pkg in args[1] if raw_pkg not in error.missing_packages]
+                stripped_packages = [raw_pkg for raw_pkg in installed_names if raw_pkg not in error.missing_packages]
                 try:
                     package_data = self.utils.find_pkg(stripped_packages)
                 except PackageNotFound as error:
                     print(error.message)
+                    print(f"Note: Use \x1b[1m{__title__} -Ci package-name\x1b[0m to ignore packages")
+                    return
+                except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError,
+                        urllib.error.URLError, TimeoutError) as error:
+                    print(f"An error occurred while getting information on the package/s: {str(error)}")
                     return
             else:
                 print(error.message)
+                print(f"Note: Use \x1b[1m{__title__} -Ci package-name\x1b[0m to ignore packages")
                 return
         except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
                 TimeoutError) as error:
             print(f"An error occurred while getting information on the package/s: {str(error)}")
             return
-        package_names = [package["Name"] for package in package_data]
-        if len(package_names) < 2:
-            found_message = f"A package called \033[1m{package_names[0]}\033[0m was found." \
-                            f"\nMake and install the package?"
+        upgradable = []
+        for package in package_data:
+            if package["Version"] != installed_versions[package["Name"]]:
+                upgradable.append(package["Name"])
+        if len(upgradable) > 0:
+            print(f"{len(upgradable)} AUR packages can be upgraded:\n    {' '.join(upgradable)}")
+            raw_response = input("Upgrade these packages now? [Y/n]: ")
+            if not raw_response.lower().startswith("y"):
+                print("aborting...")
+                return
+            print("It is recommended to run pacman -Syu before upgrading these packages")
+            print(f"Note: pass the s argument to skip running running pacman -Syu ("
+                  f"NOT RECOMMENDED unless you have already done so). "
+                  f"eg: {sys.argv[0]} -Cs package_name")
+            before_mod_times = self.utils.fetch_initramfs_mod_times()
+            if "s" not in args[0]:
+                # raw_response = input("Update archlinux-keyring first? [y/N]: ")
+                print("Note: If you run into package signature errors, try upgrading the archlinux-keyring"
+                      f"by passing the k argument: eg: {sys.argv[0]} -Ck package_name")
+                if "k" in args[0]:
+                    print("Attempting to upgrade archlinux-keyring first to prevent signature errors...")
+                    if os.getuid() == 0:
+                        keyring_update_failed = os.system("pacman -Sy archlinux-keyring") >> 8
+                    else:
+                        keyring_update_failed = os.system("sudo pacman -Sy archlinux-keyring") >> 8
+                    if keyring_update_failed:
+                        print("Failed to upgrade archlinux-keyring.")
+                    else:
+                        print("Successfully upgraded archlinux-keyring")
+                    print("\x1b[1;33mWARNING\x1b[0m: The system has been \x1b[mPARTIALLY UPGRADED!\x1b[0m In other "
+                          "words "
+                          "aborting now and not fully upgrading with pacman -Syu may leave your system in a "
+                          "broken state! So please let it run or do it manually")
+                if os.getuid() == 0:
+                    upgrade_failed = os.system("pacman -Syu") >> 8
+                else:
+                    upgrade_failed = os.system("sudo pacman -Syu") >> 8
+                if upgrade_failed:
+                    print(f"\033[1;31mFatal\033[0m: pacman -Syu failed with exit code {upgrade_failed}!")
+                    return
+            self.command_a(args[0], upgradable, package_data=package_data)
+            after_mod_times = self.utils.fetch_initramfs_mod_times()
+            initramfs_image_updated = False
+            for key, value in after_mod_times.items():
+                if before_mod_times[key] != value:
+                    initramfs_image_updated = True
+            if initramfs_image_updated:
+                print("The initramfs has been updated and you will need to reboot the system to use some new software.")
+                print("Do you want to restart now?")
+                print(
+                    "Type \x1b[1mYes\x1b[0m to reboot. \n\x1b[1;31m"
+                    "WARNING: typing Yes will reboot your computer! Any unsaved work will be lost!\x1b[0m"
+                )
+                raw_response = input(f" ?]: ")
+                if raw_response == "Yes":
+                    reboot_failed = os.system("sudo reboot") >> 8
+                    if reboot_failed:
+                        print("Reboot command failed, you will need to rebot manually")
+                    else:
+                        print("Rebooting...")
         else:
-            found_message = f"Some packages called \033[1m{', '.join(package_names)}\033[0m were found." \
-                            f"\nMake and install the packages?"
-        raw_response = input(f"{found_message} [Y/n]: ")
-        if not raw_response.lower().startswith("y"):
-            print("aborting...")
-            return
+            print("\x1b[1mAll installed AUR packages are up to date\x1b[0m")
+
+    def command_v(self, *args, **kwargs):
+        """"""
+        print("not implemented")
+
+    def command_a(self, *args, **kwargs):
+        """
+        install a package by adding it to the ~/stored-aur-packages directory and installing it (not yet implemented)
+        """
+        if not kwargs.get("package_data"):
+            print(f"Searching for \x1b[1m{', '.join(args[1])}\x1b[0m")
+            try:
+                package_data = self.utils.find_pkg(args[1])
+            except PackageNotFound as error:
+                if "f" in args[0]:
+                    stripped_packages = [raw_pkg for raw_pkg in args[1] if raw_pkg not in error.missing_packages]
+                    try:
+                        package_data = self.utils.find_pkg(stripped_packages)
+                    except PackageNotFound as error:
+                        print(error.message)
+                        return
+                else:
+                    print(error.message)
+                    return
+            except (AURWebRTCError, HTTPException, UnexpectedContentType, json.JSONDecodeError, urllib.error.URLError,
+                    TimeoutError) as error:
+                print(f"An error occurred while getting information on the package/s: {str(error)}")
+                return
+            package_names = [package["Name"] for package in package_data]
+            if len(package_names) < 2:
+                found_message = f"A package called \033[1m{package_names[0]}\033[0m was found." \
+                                f"\nMake and install the package?"
+            else:
+                found_message = f"Some packages called \033[1m{', '.join(package_names)}\033[0m were found." \
+                                f"\nMake and install the packages?"
+            raw_response = input(f"{found_message} [Y/n]: ")
+            if not raw_response.lower().startswith("y"):
+                print("aborting...")
+                return
+        else:
+            package_data = kwargs["package_data"]
+            package_names = [package["Name"] for package in package_data]
         bases = []
         for package in package_data:
             if package["Name"] != package["PackageBase"]:
@@ -829,46 +940,66 @@ class BAURPMCommands:
                     bases.append(package["PackageBase"])
                 else:
                     continue
-            try:
-                already_cloned = self.utils.git_clone_pkg(
-                    package["PackageBase"], pathlib.Path(f"~/stored-aur-packages")
-                )
-            except BAURPMException as err:
-                print(f"An error occurred while downloading the package/s: {str(err)}")
-                return
-            if already_cloned:
-                print("Package already cloned. Checking for updates...")
-                makepkg_info_cmd = os.popen(
-                    f"makepkg --dir ~/stored-aur-packages/{package['PackageBase']} --printsrcinfo"
-                )
-                makepkg_info = makepkg_info_cmd.read().splitlines()
-                makepkg_info_failed = (makepkg_info_cmd.close() or 255) >> 8
-                if makepkg_info_failed:
-                    print(f"\033[1;31mFatal\033[0m: Fetching info on dependencies for package base "
-                          f"\x1b[1m{package['PackageBase']}\x1b[0m failed with exit code {makepkg_info_failed}!")
-                    return
-                pkg_ver = None
-                epoch = None
-                pkg_rel = None
-                for line in makepkg_info:
-                    if line.strip().startswith("pkgver = "):
-                        pkg_ver = line.split(" = ")[1]
-                    if line.strip().startswith("epoch = "):
-                        epoch = line.split(" = ")[1]
-                    if line.strip().startswith("pkgrel = "):
-                        pkg_rel = line.split(" = ")[1]
-                full_package_str = (f"{epoch}:" if epoch else "") + (pkg_ver or "") + (f"-{pkg_rel}" if pkg_rel else "")
-                if pkg_ver and full_package_str != package["Version"]:
-                    print("Update Available")
-                    raw_response = input(f"Git Pull to update? [Y/n]: ")
-                    if raw_response.lower().startswith("y"):
-                        try:
-                            self.utils.git_pull_pkg(package["PackageBase"], pathlib.Path(f"~/stored-aur-packages"))
-                        except BAURPMException as err:
-                            print(f"An error occurred while downloading the package/s: {str(err)}")
-                            return
+            if kwargs.get("package_data"):
+                if pathlib.Path(f"~/stored-aur-packages/{package['PackageBase']}/PKGBUILD").exists():
+                    try:
+                        self.utils.git_pull_pkg(package["PackageBase"], pathlib.Path(f"~/stored-aur-packages"))
+                    except BAURPMException as err:
+                        print(f"An error occurred while downloading the package/s: {str(err)}")
+                        return
                 else:
-                    print(f"\033[1;33mWarning\033[0m: {package['Name']} is already up to date -- reinstalling")
+                    print(f"Package {package['PackageBase']} not cloned into ~/stored-aur-packages. Cloning...")
+                    try:
+                        self.utils.git_clone_pkg(
+                            package["PackageBase"], pathlib.Path(f"~/stored-aur-packages")
+                        )
+                    except BAURPMException as err:
+                        print(f"An error occurred while downloading the package/s: {str(err)}")
+                        return
+            else:
+                if not pathlib.Path(f"~/stored-aur-packages/{package['PackageBase']}/PKGBUILD").exists():
+                    try:
+                        self.utils.git_clone_pkg(
+                            package["PackageBase"], pathlib.Path(f"~/stored-aur-packages")
+                        )
+                    except BAURPMException as err:
+                        print(f"An error occurred while downloading the package/s: {str(err)}")
+                        return
+                else:
+                    print("Package already cloned. Checking for updates...")
+                    makepkg_info_cmd = os.popen(
+                        f"makepkg --dir ~/stored-aur-packages/{package['PackageBase']} --printsrcinfo"
+                    )
+                    makepkg_info = makepkg_info_cmd.read().splitlines()
+                    makepkg_info_failed = (makepkg_info_cmd.close() or 255) >> 8
+                    if makepkg_info_failed:
+                        print(f"\033[1;31mFatal\033[0m: Fetching info on dependencies for package base "
+                              f"\x1b[1m{package['PackageBase']}\x1b[0m failed with exit code {makepkg_info_failed}!")
+                        return
+                    pkg_ver = None
+                    epoch = None
+                    pkg_rel = None
+                    for line in makepkg_info:
+                        if line.strip().startswith("pkgver = "):
+                            pkg_ver = line.split(" = ")[1]
+                        if line.strip().startswith("epoch = "):
+                            epoch = line.split(" = ")[1]
+                        if line.strip().startswith("pkgrel = "):
+                            pkg_rel = line.split(" = ")[1]
+                    full_package_str = (
+                            (f"{epoch}:" if epoch else "") + (pkg_ver or "") + (f"-{pkg_rel}" if pkg_rel else "")
+                    )
+                    if pkg_ver and full_package_str != package["Version"]:
+                        print("Update Available")
+                        raw_response = input(f"Git Pull to update? [Y/n]: ")
+                        if raw_response.lower().startswith("y"):
+                            try:
+                                self.utils.git_pull_pkg(package["PackageBase"], pathlib.Path(f"~/stored-aur-packages"))
+                            except BAURPMException as err:
+                                print(f"An error occurred while downloading the package/s: {str(err)}")
+                                return
+                    else:
+                        print(f"\033[1;33mWarning\033[0m: {package['Name']} is already up to date -- reinstalling")
         if "n" not in args[0]:
             print(f"Note: pass the n argument to skip reading PKGBUILD files. eg: {sys.argv[0]} -An package_name")
             for package in package_data:
@@ -983,22 +1114,11 @@ class BAURPMCommands:
                     print("dependency was in package names")
                     continue
                 package_data.append(dependency)
-                dep_snapshot_url: str = dependency["URLPath"]
-                if dependency["Name"] != dependency["PackageBase"]:
-                    dep_snapshot_url = f'{pathlib.Path(dep_snapshot_url).parents[0]}/{dependency["PackageBase"]}' \
-                                       f'{"".join(pathlib.Path(dep_snapshot_url).suffixes)}'
-                # try:
-                #     dep_filename = self.utils.download_pkg(dep_snapshot_url, pathlib.Path(f"/tmp/baurpm/cache"))
-                #     shutil.unpack_archive(dep_filename, f"/tmp/baurpm/")
-                # except (HTTPException, urllib.error.URLError, TimeoutError) as err:
-                #     print(f"An error occurred while downloading the package/s: {str(err)}")
-                #     return
                 try:
                     self.utils.git_clone_pkg(dependency["PackageBase"], pathlib.Path(f"~/stored-aur-packages"))
                 except BAURPMException as err:
                     print(f"An error occurred while downloading the package/s: {str(err)}")
                     return
-                # os.remove(dep_filename)
                 if dependency.get("Depends") is not None:
                     try:
                         aur_packages = self.utils.find_pkg(dependency["Depends"], ignore_missing=True)
@@ -1019,10 +1139,10 @@ class BAURPMCommands:
                 os.chdir(os.path.expanduser(f'~/stored-aur-packages/{package_name}'))
                 if os.getuid() == 0:
                     shutil.chown(os.getcwd(), os.getenv('SUDO_USER') or 'nobody')
-                    compilation_failed = os.system(f"sudo -u {os.getenv('SUDO_USER') or 'nobody'} makepkg -s") >> 8
+                    compilation_failed = os.system(f"sudo -u {os.getenv('SUDO_USER') or 'nobody'} makepkg -sf") >> 8
                 else:
-                    compilation_failed = os.system("makepkg -s") >> 8
-                if compilation_failed and compilation_failed != 13:
+                    compilation_failed = os.system("makepkg -sf") >> 8
+                if compilation_failed:
                     print(f"\033[1;31mFatal\033[0m: makepkg process failed with exit code {compilation_failed}!")
                     return
                 built_pkgs.append(package["PackageBase"])
