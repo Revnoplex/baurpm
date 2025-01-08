@@ -295,7 +295,7 @@ class BAURPMUtils:
         full_directory = to.expanduser().absolute()
         process = subprocess.Popen(
             ["git", "-C", str(full_directory), "clone", f"{self.aur_base_url}/{pkg_base_name}.git"],
-            stdout=sys.stdout, stderr=subprocess.PIPE
+            stderr=subprocess.PIPE
         )
         stderr_output = process.stderr.read().splitlines()
         already_cloned_str = (
@@ -312,7 +312,7 @@ class BAURPMUtils:
         full_directory = to.expanduser().absolute()
         process = subprocess.Popen(
             ["git", "-C", f"{full_directory}/{pkg_base_name}", "pull"],
-            stdout=sys.stdout, stderr=subprocess.PIPE
+            stderr=subprocess.PIPE
         )
         if process.wait():
             raise BAURPMException(f"Git pull failed with exit code {process.poll()}.")
@@ -420,14 +420,25 @@ class BAURPMCommands:
                             print(f"Build files for \033[1m{package_name}\033[0m are:"
                                   f"\n     {' '.join(os.listdir(f'/tmp/baurpm/{package_name}'))}")
                             input("Press Enter to continue and view PKGBUILD")
-                            viewing_failed = os.system(f"less /tmp/baurpm/{package_name}/PKGBUILD") >> 8
+                            viewing_process = subprocess.Popen(
+                                ["less", f"/tmp/baurpm/{package_name}/PKGBUILD"], stderr=subprocess.PIPE
+                            )
+                            viewing_failed = viewing_process.wait()
                             if viewing_failed:
-                                print(f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code "
-                                      f"{viewing_failed}!")
-                            deletion_failed = os.system("rm -rf /tmp/baurpm") >> 8
+                                print(
+                                    f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code "
+                                    f"{viewing_failed}: {viewing_process.stderr.read().decode('utf-8')}"
+                                )
+                            deletion_process = subprocess.Popen(
+                                ["rm", "-rf", "/tmp/baurpm"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE
+                            )
+                            deletion_failed = deletion_process.wait()
                             if deletion_failed:
-                                print(f"\033[1;31mFatal\033[0m: Deleting build files failed with exit code "
-                                      f"{deletion_failed}!")
+                                print(
+                                    f"\033[1;31mFatal\033[0m: Deleting build files failed with exit code "
+                                    f"{deletion_failed}: {deletion_process.stderr.read().decode('utf-8')}"
+                                )
                     end_selections = False
             except (KeyboardInterrupt, EOFError, SystemExit):
                 print()
@@ -500,9 +511,15 @@ class BAURPMCommands:
                       f"\n     {' '.join(os.listdir(f'/tmp/baurpm/{package_name}'))}")
                 print(f"See \033[1m/tmp/baurpm/{package_name}\033[0m for more information.")
                 input("Press Enter to continue and view PKGBUILD")
-                viewing_failed = os.system(f"less /tmp/baurpm/{package_name}/PKGBUILD") >> 8
+                viewing_process = subprocess.Popen(
+                    ["less", f"/tmp/baurpm/{package_name}/PKGBUILD"], stderr=subprocess.PIPE
+                )
+                viewing_failed = viewing_process.wait()
                 if viewing_failed:
-                    print(f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code {viewing_failed}!")
+                    print(
+                        f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code {viewing_failed}: "
+                        f"{viewing_process.stderr.read().decode('utf-8')}"
+                    )
             raw_response = input(f"Continue Installation? [Y/n]: ")
             if not raw_response.lower().startswith("y"):
                 print("aborting...")
@@ -637,11 +654,19 @@ class BAURPMCommands:
                 os.chdir(f'/tmp/baurpm/{package_name}')
                 if os.getuid() == 0:
                     shutil.chown(os.getcwd(), os.getenv('SUDO_USER') or 'nobody')
-                    compilation_failed = os.system(f"sudo -u {os.getenv('SUDO_USER') or 'nobody'} makepkg -sf") >> 8
+                    makepkg_process = subprocess.Popen(
+                        ["sudo", "-u", os.getenv('SUDO_USER') or 'nobody', "makepkg", "-sf"], stderr=subprocess.PIPE
+                    )
                 else:
-                    compilation_failed = os.system("makepkg -sf") >> 8
-                if compilation_failed:
-                    print(f"\033[1;31mFatal\033[0m: makepkg process failed with exit code {compilation_failed}!")
+                    makepkg_process = subprocess.Popen(
+                        ["makepkg", "-sf"], stderr=subprocess.PIPE
+                    )
+                makepkg_failed = makepkg_process.wait()
+                if makepkg_failed:
+                    print(
+                        f"\033[1;31mFatal\033[0m: makepkg process failed with exit code {makepkg_failed}: "
+                        f"{makepkg_process.stderr.read().decode('utf-8')}"
+                    )
                     return
                 built_pkgs.append(package["PackageBase"])
         os.chdir(original_directory)
@@ -664,9 +689,16 @@ class BAURPMCommands:
             return
         else:
             print("Cleaning up build files...")
-            deletion_failed = os.system("rm -rf /tmp/baurpm") >> 8
+            deletion_process = subprocess.Popen(
+                ["rm", "-rf", "/tmp/baurpm"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE
+            )
+            deletion_failed = deletion_process.wait()
             if deletion_failed:
-                print(f"\033[1;31mFatal\033[0m: Deleting build files failed with exit code {deletion_failed}!")
+                print(
+                    f"\033[1;31mFatal\033[0m: Deleting build files failed with exit code "
+                    f"{deletion_failed}: {deletion_process.stderr.read().decode('utf-8')}"
+                )
         print("Done!")
 
     def command_c(self, *args):
@@ -723,11 +755,13 @@ class BAURPMCommands:
             print(f"An error occurred while getting information on the package/s: {str(error)}")
             return
         upgradable = []
+        upgradable_names = []
         for package in package_data:
             if package["Version"] != installed_versions[package["Name"]]:
-                upgradable.append(package["Name"])
+                upgradable.append(package)
+                upgradable_names.append(package["Name"])
         if len(upgradable) > 0:
-            print(f"{len(upgradable)} AUR packages can be upgraded:\n    {' '.join(upgradable)}")
+            print(f"{len(upgradable)} AUR packages can be upgraded:\n    {' '.join(upgradable_names)}")
             raw_response = input("Upgrade these packages now? [Y/n]: ")
             if not raw_response.lower().startswith("y"):
                 print("aborting...")
@@ -762,7 +796,7 @@ class BAURPMCommands:
                 if upgrade_failed:
                     print(f"\033[1;31mFatal\033[0m: pacman -Syu failed with exit code {upgrade_failed}!")
                     return
-            self.command_i(args[0], upgradable, package_data=package_data)
+            self.command_i(args[0], upgradable_names, package_data=upgradable)
             after_mod_times = self.utils.fetch_initramfs_mod_times()
             initramfs_image_updated = False
             for key, value in after_mod_times.items():
@@ -830,11 +864,13 @@ class BAURPMCommands:
             print(f"An error occurred while getting information on the package/s: {str(error)}")
             return
         upgradable = []
+        upgradable_names = []
         for package in package_data:
             if package["Version"] != installed_versions[package["Name"]]:
-                upgradable.append(package["Name"])
+                upgradable.append(package)
+                upgradable_names.append(package["Name"])
         if len(upgradable) > 0:
-            print(f"{len(upgradable)} AUR packages can be upgraded:\n    {' '.join(upgradable)}")
+            print(f"{len(upgradable)} AUR packages can be upgraded:\n    {' '.join(upgradable_names)}")
             raw_response = input("Upgrade these packages now? [Y/n]: ")
             if not raw_response.lower().startswith("y"):
                 print("aborting...")
@@ -869,7 +905,7 @@ class BAURPMCommands:
                 if upgrade_failed:
                     print(f"\033[1;31mFatal\033[0m: pacman -Syu failed with exit code {upgrade_failed}!")
                     return
-            self.command_a(args[0], upgradable, package_data=package_data)
+            self.command_a(args[0], upgradable_names, package_data=upgradable)
             after_mod_times = self.utils.fetch_initramfs_mod_times()
             initramfs_image_updated = False
             for key, value in after_mod_times.items():
@@ -1008,9 +1044,16 @@ class BAURPMCommands:
                       f"\n     {' '.join(os.listdir(os.path.expanduser(f'~/stored-aur-packages/{package_name}')))}")
                 print(f"See \033[1m~/stored-aur-packages/{package_name}\033[0m for more information.")
                 input("Press Enter to continue and view PKGBUILD")
-                viewing_failed = os.system(f"less ~/stored-aur-packages/{package_name}/PKGBUILD") >> 8
+                viewing_process = subprocess.Popen(
+                    ["less", str(pathlib.Path(f"~/stored-aur-packages/{package_name}/PKGBUILD").expanduser())],
+                    stderr=subprocess.PIPE
+                )
+                viewing_failed = viewing_process.wait()
                 if viewing_failed:
-                    print(f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code {viewing_failed}!")
+                    print(
+                        f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code {viewing_failed}: "
+                        f"{viewing_process.stderr.read().decode('utf-8')}"
+                    )
             raw_response = input(f"Continue Installation? [Y/n]: ")
             if not raw_response.lower().startswith("y"):
                 print("aborting...")
@@ -1139,11 +1182,19 @@ class BAURPMCommands:
                 os.chdir(os.path.expanduser(f'~/stored-aur-packages/{package_name}'))
                 if os.getuid() == 0:
                     shutil.chown(os.getcwd(), os.getenv('SUDO_USER') or 'nobody')
-                    compilation_failed = os.system(f"sudo -u {os.getenv('SUDO_USER') or 'nobody'} makepkg -sf") >> 8
+                    makepkg_process = subprocess.Popen(
+                        ["sudo", "-u", os.getenv('SUDO_USER') or 'nobody', "makepkg", "-sf"], stderr=subprocess.PIPE
+                    )
                 else:
-                    compilation_failed = os.system("makepkg -sf") >> 8
-                if compilation_failed:
-                    print(f"\033[1;31mFatal\033[0m: makepkg process failed with exit code {compilation_failed}!")
+                    makepkg_process = subprocess.Popen(
+                        ["makepkg", "-sf"], stderr=subprocess.PIPE
+                    )
+                makepkg_failed = makepkg_process.wait()
+                if makepkg_failed:
+                    print(
+                        f"\033[1;31mFatal\033[0m: makepkg process failed with exit code {makepkg_failed}: "
+                        f"{makepkg_process.stderr.read().decode('utf-8')}"
+                    )
                     return
                 built_pkgs.append(package["PackageBase"])
         os.chdir(original_directory)
