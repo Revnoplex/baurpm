@@ -402,7 +402,7 @@ class BAURPMCommands:
                             if name in ["FirstSubmitted", "LastModified"]:
                                 vtime = datetime.datetime.fromtimestamp(value if isinstance(value, (int, float)) else 0)
                                 value = vtime.strftime(f"%A, %B %d %Y, %H:%M:%S (local time)")
-                            output += f'\n{name}:{"".join([" " for _ in range(space_size + 4 - len(name))])}{value}'
+                            output += f'\n{name}:{" "*(space_size + 4 - len(name))}{value}'
                         print(output)
                         prompt = input("Download and view build files and PKGBUILD? [y/n]: ")
                         if prompt.lower().startswith("y"):
