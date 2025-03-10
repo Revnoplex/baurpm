@@ -18,7 +18,7 @@ __title__ = "baurpm"
 __version__ = "1.0.0a"
 __author__ = "Revnoplex"
 __license__ = "MIT"
-__copyright__ = f"Copyright (c) 2022-2024 {__author__}"
+__copyright__ = f"Copyright (c) 2022-2025 {__author__}"
 
 
 class BAURPMException(BaseException):
