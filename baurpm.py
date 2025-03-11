@@ -385,64 +385,61 @@ class BAURPMCommands:
         else:
             found_message = f"Some packages called \033[1m{', '.join(package_names)}\033[0m were found."
         print(f"{found_message}")
-        end_selections = True
-        while end_selections:
-            try:
-                for package in package_data:
-                    prompt = input(f"View information for {package['Name']}? [y/n]: ")
+        for package in package_data:
+            try:    
+                prompt = input(f"View information for {package['Name']}? [y/n]: ")
+                if prompt.lower().startswith("y"):
+                    space_size = 0
+                    for name, _ in package.items():
+                        if len(name) > space_size:
+                            space_size = len(name)
+                    output = ""
+                    for name, value in package.items():
+                        if isinstance(value, list):
+                            value = ", ".join(value)
+                        if name in ["FirstSubmitted", "LastModified"]:
+                            vtime = datetime.datetime.fromtimestamp(value if isinstance(value, (int, float)) else 0)
+                            value = vtime.strftime(f"%A, %B %d %Y, %H:%M:%S (local time)")
+                        output += f'\n{name}:{" "*(space_size + 4 - len(name))}{value}'
+                    print(output)
+                    prompt = input("Download and view build files and PKGBUILD? [y/n]: ")
                     if prompt.lower().startswith("y"):
-                        space_size = 0
-                        for name, _ in package.items():
-                            if len(name) > space_size:
-                                space_size = len(name)
-                        output = ""
-                        for name, value in package.items():
-                            if isinstance(value, list):
-                                value = ", ".join(value)
-                            if name in ["FirstSubmitted", "LastModified"]:
-                                vtime = datetime.datetime.fromtimestamp(value if isinstance(value, (int, float)) else 0)
-                                value = vtime.strftime(f"%A, %B %d %Y, %H:%M:%S (local time)")
-                            output += f'\n{name}:{" "*(space_size + 4 - len(name))}{value}'
-                        print(output)
-                        prompt = input("Download and view build files and PKGBUILD? [y/n]: ")
-                        if prompt.lower().startswith("y"):
-                            snapshot_url: str = package["URLPath"]
-                            snapshot_url = f'{pathlib.Path(snapshot_url).parents[0]}/{package["PackageBase"]}' \
-                                           f'{"".join(pathlib.Path(snapshot_url).suffixes)}'
-                            try:
-                                filename = \
-                                    self.utils.download_pkg(snapshot_url, pathlib.Path(f"/tmp/baurpm/cache"))
-                            except (HTTPException, urllib.error.URLError, TimeoutError) as err:
-                                print(f"An error occurred while downloading the package/s: {str(err)}")
-                                return
-                            shutil.unpack_archive(filename, f"/tmp/baurpm/")
-                            package_name = package["PackageBase"]
-                            print(f"Build files for \033[1m{package_name}\033[0m are:"
-                                  f"\n     {' '.join(os.listdir(f'/tmp/baurpm/{package_name}'))}")
-                            input("Press Enter to continue and view PKGBUILD")
-                            viewing_process = subprocess.Popen(
-                                ["less", f"/tmp/baurpm/{package_name}/PKGBUILD"], stderr=subprocess.PIPE
+                        snapshot_url: str = package["URLPath"]
+                        snapshot_url = f'{pathlib.Path(snapshot_url).parents[0]}/{package["PackageBase"]}' \
+                                        f'{"".join(pathlib.Path(snapshot_url).suffixes)}'
+                        try:
+                            filename = \
+                                self.utils.download_pkg(snapshot_url, pathlib.Path(f"/tmp/baurpm/cache"))
+                        except (HTTPException, urllib.error.URLError, TimeoutError) as err:
+                            print(f"An error occurred while downloading the package/s: {str(err)}")
+                            return
+                        shutil.unpack_archive(filename, f"/tmp/baurpm/")
+                        package_name = package["PackageBase"]
+                        print(f"Build files for \033[1m{package_name}\033[0m are:"
+                                f"\n     {' '.join(os.listdir(f'/tmp/baurpm/{package_name}'))}")
+                        input("Press Enter to continue and view PKGBUILD")
+                        viewing_process = subprocess.Popen(
+                            ["less", f"/tmp/baurpm/{package_name}/PKGBUILD"], stderr=subprocess.PIPE
+                        )
+                        viewing_failed = viewing_process.wait()
+                        if viewing_failed:
+                            print(
+                                f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code "
+                                f"{viewing_failed}: {viewing_process.stderr.read().decode('utf-8')}"
                             )
-                            viewing_failed = viewing_process.wait()
-                            if viewing_failed:
-                                print(
-                                    f"\033[1;33mWarning\033[0m: Viewing package info failed with exit code "
-                                    f"{viewing_failed}: {viewing_process.stderr.read().decode('utf-8')}"
-                                )
-                            deletion_process = subprocess.Popen(
-                                ["rm", "-rf", "/tmp/baurpm"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.PIPE
+                        deletion_process = subprocess.Popen(
+                            ["rm", "-rf", "/tmp/baurpm"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE
+                        )
+                        deletion_failed = deletion_process.wait()
+                        if deletion_failed:
+                            print(
+                                f"\033[1;31mFatal\033[0m: Deleting build files failed with exit code "
+                                f"{deletion_failed}: {deletion_process.stderr.read().decode('utf-8')}"
                             )
-                            deletion_failed = deletion_process.wait()
-                            if deletion_failed:
-                                print(
-                                    f"\033[1;31mFatal\033[0m: Deleting build files failed with exit code "
-                                    f"{deletion_failed}: {deletion_process.stderr.read().decode('utf-8')}"
-                                )
-                    end_selections = False
             except (KeyboardInterrupt, EOFError, SystemExit):
                 print()
-                end_selections = False
+                break
 
     def command_i(self, *args, **kwargs):
         """Install an AUR package without keeping the download
