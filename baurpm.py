@@ -417,6 +417,7 @@ class BAURPMCommands:
                         package_name = package["PackageBase"]
                         print(f"Build files for \033[1m{package_name}\033[0m are:"
                                 f"\n     {' '.join(os.listdir(f'/tmp/baurpm/{package_name}'))}")
+                        print(f"See \033[1m/tmp/baurpm/{package_name}\033[0m for more information.")
                         input("Press Enter to continue and view PKGBUILD")
                         viewing_process = subprocess.Popen(
                             ["less", f"/tmp/baurpm/{package_name}/PKGBUILD"], stderr=subprocess.PIPE
