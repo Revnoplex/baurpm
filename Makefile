@@ -13,3 +13,7 @@ baurpm_debug_test:
 	cc -c -o /dev/null -lcurl -lcjson -larchive -O -Wall -Wextra baurpm.c
 	mkdir -p build
 	cc -o build/baurpm-debug -lcurl -lcjson -larchive -g -fsanitize=address -fsanitize=undefined baurpm.c
+
+install:
+	install -Dm0755 "build/baurpm" "/usr/bin/baurpm"
+	install -Dm0644 -t "/usr/share/licenses/baurpm/" LICENSE.md

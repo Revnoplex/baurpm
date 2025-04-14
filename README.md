@@ -22,6 +22,30 @@ The main reason is so I can easily install or update it on any of my archlinux i
 
 This is an AUR Helper so this will only run on arch based systems.
 
+## Building The C Version.
+
+make sure all dependencies are installed
+```sh
+sudo pacman -S --needed - < pkglist.txt
+```
+
+Running make by itself should generate `build/baurpm`
+```sh
+make
+```
+
+You can build debug binaries with
+```sh
+make -B baurpm_debug
+```
+This creates `build/baurpm-debug`
+
+You can install with
+```sh
+sudo make install
+```
+
+
 ## Usage
 Usage Layout is
 ```sh

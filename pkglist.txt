@@ -1,0 +1,4 @@
+curl
+cjson
+libarchive
+sudo
