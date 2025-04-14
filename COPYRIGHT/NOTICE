@@ -1,0 +1,13 @@
+Certain parts of baurpm.c are not original and are under different licenses due to their different origins.
+
+From lines 26 to 66:
+The memory struct (struct memory), cb (static size_t cb) and write_data (static size_t write_data) functions are licensed under the CURL license. 
+See CURL file for the invididual notice.
+
+From lines 68 to 187:
+the extract (static void extract) and copy_data (static int copy_data) functions are in the public domain as stated at the start of https://github.com/libarchive/libarchive/blob/master/examples/untar.c.
+See LIBARCHIVE file for the invididual notice.
+
+The remmaining code is original and is licensed under the MIT license (See LICENSE.md)
+
+

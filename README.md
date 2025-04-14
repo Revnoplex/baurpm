@@ -10,8 +10,14 @@ Also, the code is not guaranteed to be high quality as it is just for a personal
 I have uploaded this to GitHub in case of someone wanting to use it and/or to properly develop it. 
 The main reason is so I can easily install or update it on any of my archlinux installations.
 
-## Dependencies
+## Dependencies for python version.
 - python 3.8 or later
+- sudo
+
+## Dependencies for c version:
+- curl
+- cjson
+- libarchive
 - sudo
 
 This is an AUR Helper so this will only run on arch based systems.
