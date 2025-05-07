@@ -12,6 +12,8 @@
 #include <cjson/cJSON.h>
 #include <archive.h>
 #include <archive_entry.h>
+#include <alpm.h>
+#include <alpm_list.h>
 
 const char *LONG_NAME = "Basic Arch User Repository (AUR) Package Manager";
 const char *SHORT_NAME = "baurpm";
@@ -268,7 +270,11 @@ char *byte_units(uint64_t byte_size) {
 
 cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, uint8_t *status) {
     const char *err_msg_prefix = "An error occurred while getting information on the package/s: "; 
-
+    if (!pkg_len) {
+        fprintf(stderr, "Warning: No packages were given to look for.\n");
+        *status = 20;
+        return cJSON_CreateNull();
+    }
     uint32_t url_args_size = 0;
     for (int32_t pkg_idx = 0; pkg_idx < pkg_len; pkg_idx++) {
         url_args_size += 7;
@@ -281,7 +287,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
 
     int32_t url_args_idx = 0;
     for (int32_t pkg_idx = 0; pkg_idx < pkg_len; pkg_idx++) {
-        char delimiter[7] = "&arg[]=";
+        char delimiter[] = "&arg[]=";
         int32_t del_idx;
         for (del_idx = 0; del_idx < 7; del_idx++) {
             url_args[url_args_idx] = delimiter[del_idx];
@@ -736,14 +742,14 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc) {
             return download_status;
         }
         if (!*download_path) {
-            fprintf(stderr, "Fatal: API metadata went missing.");
+            fprintf(stderr, "Fatal: API metadata went missing.\n");
             return 12;
         }
         uid_t uid = getuid();
         struct passwd* pwd = getpwuid(uid);
 
         if (!pwd) {
-            fprintf(stderr, "Fatal: Could not get home directory");
+            fprintf(stderr, "Fatal: Could not get home directory\n");
             return 10;
         }
         uint32_t hdirc;
@@ -893,12 +899,13 @@ int command_g(char *options, char *arguments[], int32_t arg_len) {
         return status;
     }
     if (cJSON_IsNull(response_body)) {
-        fprintf(stderr, "Fatal: API metadata went missing.");
+        fprintf(stderr, "Fatal: API metadata went missing.\n");
         return 9;
     }
     cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     if (!found_packages) {
-        fprintf(stderr, "Fatal: API results went missing.");
+        fprintf(stderr, "Fatal: API results went missing.\n");
+        cJSON_Delete(response_body);
         return 9;
     }
     
@@ -1079,7 +1086,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len) {
             return download_status;
         }
         if (!*download_path) {
-            fprintf(stderr, "Fatal: API metadata went missing.");
+            fprintf(stderr, "Fatal: API metadata went missing.\n");
             free(found_pkg_names);
             cJSON_Delete(response_body);
             return 12;
@@ -1187,12 +1194,13 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
         return status;
     }
     if (cJSON_IsNull(response_body)) {
-        fprintf(stderr, "Fatal: API metadata went missing.");
+        fprintf(stderr, "Fatal: API metadata went missing.\n");
         return 9;
     }
     cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     if (!found_packages) {
-        fprintf(stderr, "Fatal: API results went missing.");
+        fprintf(stderr, "Fatal: API results went missing.\n");
+        cJSON_Delete(response_body);
         return 9;
     }
     if (!cJSON_GetArraySize(found_packages)) {
@@ -1536,77 +1544,13 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
     //     printf("%s", all_depends[idx]);
     // }
     // printf("\n");
-    printf("Fetching dependencies...\n");
-    cJSON *depends_response_body = find_pkg(all_depends, actual_depends, 1, &status);
-    free(all_depends);
-    if (status) {
-        cJSON_Delete(depends_response_body);
-        if (base_dependencies != NULL) {
-            for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
-                free(base_dependencies[idx]);
-            }
-            free(base_dependencies);
-        }
-        free(found_pkg_names);
-        cJSON_Delete(response_body);
-        return status;
-    }
-    if (cJSON_IsNull(depends_response_body)) {
-        fprintf(stderr, "Fatal: API metadata went missing.");
-        cJSON_Delete(depends_response_body);
-        if (base_dependencies != NULL) {
-            for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
-                free(base_dependencies[idx]);
-            }
-            free(base_dependencies);
-        }
-        free(found_pkg_names);
-        cJSON_Delete(response_body);
-        return 9;
-    }
-    cJSON *found_dependencies = cJSON_GetObjectItemCaseSensitive(depends_response_body, "results");
-    if (!found_dependencies) {
-        fprintf(stderr, "Fatal: API results went missing.");
-        cJSON_Delete(depends_response_body);
-        if (base_dependencies != NULL) {
-            for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
-                free(base_dependencies[idx]);
-            }
-            free(base_dependencies);
-        }
-        free(found_pkg_names);
-        cJSON_Delete(response_body);
-        return 9;
-    }
-    cJSON *found_dependency = NULL;
-    // printf("%d\n", cJSON_GetArraySize(found_dependencies));
-    cJSON *required_dependencies = cJSON_CreateArray();
-    uint32_t required_dependencies_count = 0;
-    cJSON_ArrayForEach(found_dependency, found_dependencies) {
-        cJSON *dep_base = cJSON_GetObjectItemCaseSensitive(found_dependency, "PackageBase");
-        uint8_t base_match = 0;
-        cJSON_ArrayForEach(package, found_packages) {
-            cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
-            if ((!pkg_base) || (!cJSON_IsString(pkg_base)) || (!dep_base) || (!cJSON_IsString(dep_base))) {
-                continue;
-            }
-            for (uint32_t idx = 0; dep_base->valuestring[idx] == pkg_base->valuestring[idx]; idx++) {
-                if (dep_base->valuestring[idx] == '\0') {
-                    base_match = 1;
-                    break;
-                }
-            }
-        }
-        if (base_match) {
-            continue;
-        }
-        required_dependencies_count++;
-        cJSON_AddItemReferenceToArray(required_dependencies, found_dependency);
-    }
-    if (required_dependencies_count > 0) {
-        printf("Downloading dependencies...\n");
-        download_and_extraction_failed = download_and_extract_pkgs(required_dependencies, required_dependencies_count);
-        if (download_and_extraction_failed) {
+    char install_cmd_prefix[] = "sudo pacman -U ";
+    if (actual_depends) {
+        printf("Fetching dependencies...\n");
+        cJSON *depends_response_body = find_pkg(all_depends, actual_depends, 1, &status);
+        free(all_depends);
+        if (status) {
+            cJSON_Delete(depends_response_body);
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                     free(base_dependencies[idx]);
@@ -1614,205 +1558,275 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
                 free(base_dependencies);
             }
             free(found_pkg_names);
-            cJSON_Delete(required_dependencies);
-            cJSON_Delete(depends_response_body);
             cJSON_Delete(response_body);
-            return download_and_extraction_failed;
+            return status;
         }
-    }
-    char **built_dep_bases = malloc((required_dependencies_count) * sizeof(void *));
-    uint32_t built_dep_bases_count = 0;
-    uint32_t dep_install_str_len = 0;
-    uint32_t dependency_install_count = 0;
-    char *dep_install_str = malloc(PATH_MAX*((PATH_MAX*2)+2)+1);
-    cJSON_ArrayForEach(package, required_dependencies) {
-        cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
-        uint8_t base_match = 0;
-        for (uint32_t idx = 0; idx < built_dep_bases_count && idx < found_pkg_arrc; idx++) {
-            for (uint32_t str_idx = 0; pkg_base->valuestring[str_idx] == built_dep_bases[idx][str_idx]; str_idx++) {
-                if (pkg_base->valuestring[str_idx] == '\0') {
-                    base_match = 1;
-                    break;
-                }
-            }
-        }
-        if (base_match) {
-            continue;
-        }
-        built_dep_bases[built_dep_bases_count] = pkg_base->valuestring;
-        built_dep_bases_count++;
-        if (required_dependencies_count > 1) {
-            printf("Making Dependency %d/%d \x1b[1m%s\x1b[0m\n", built_dep_bases_count, required_dependencies_count, pkg_base->valuestring);
-        } else {
-            printf("Making Dependency \x1b[1m%s\x1b[0m\n", pkg_base->valuestring);
-        }
-        chdir(pkg_base->valuestring);
-        int makepkg_status_info = system("makepkg -sf");
-        int makepkg_status = WEXITSTATUS(makepkg_status_info);
-        if (makepkg_status || WIFSIGNALED(makepkg_status_info)) {
-            int return_code = 0;
-            if (WIFSIGNALED(makepkg_status_info)) {
-                if (WTERMSIG(makepkg_status_info) == 2) {
-                    fprintf(stderr, "Makepkg process stopped by user\n");
-                } else {
-                    fprintf(stderr, "Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
-                }
-                return_code = 128 + WTERMSIG(makepkg_status_info);
-            }
-            if (makepkg_status) {
-                fprintf(stderr, "Error: makepkg error %d\n", makepkg_status);
-                return_code = 31+ makepkg_status;
-            }
+        if (cJSON_IsNull(depends_response_body)) {
+            fprintf(stderr, "Fatal: API metadata went missing.\n");
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                     free(base_dependencies[idx]);
                 }
                 free(base_dependencies);
             }
-            free(built_dep_bases);
             free(found_pkg_names);
-            cJSON_Delete(required_dependencies);
-            cJSON_Delete(depends_response_body);
             cJSON_Delete(response_body);
-            return return_code;
+            return 9;
         }
-        DIR *dir = opendir("./");
-        if (!dir) { 
-            printf("\n");
-            fprintf(stderr, "Error: could not list directory\n"); 
-            free(dep_install_str);
+        cJSON *found_dependencies = cJSON_GetObjectItemCaseSensitive(depends_response_body, "results");
+        if (!found_dependencies) {
+            fprintf(stderr, "Fatal: API results went missing.\n");
+            cJSON_Delete(depends_response_body);
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                     free(base_dependencies[idx]);
                 }
                 free(base_dependencies);
             }
-            free(built_dep_bases);
             free(found_pkg_names);
-            cJSON_Delete(required_dependencies);
-            cJSON_Delete(depends_response_body);
             cJSON_Delete(response_body);
-            return 13;
+            return 9;
         }
-        struct dirent *dir_item;
-        while ((dir_item = readdir(dir)) != NULL) {
-            if (!(
-                (dir_item->d_name[0] == '.' && dir_item->d_name[1] == '\0') 
-                || 
-                (dir_item->d_name[0] == '.' && dir_item->d_name[1] == '.' && dir_item->d_name[2] == '\0')
-            )) {
-                char install_match[] = ".pkg.tar.zst";
-                uint32_t name_length;
-                for (name_length = 0; dir_item->d_name[name_length] != '\0'; name_length++);
-                if ((name_length+1) < sizeof(install_match)) {
+        cJSON *found_dependency = NULL;
+        // printf("%d\n", cJSON_GetArraySize(found_dependencies));
+        cJSON *required_dependencies = cJSON_CreateArray();
+        uint32_t required_dependencies_count = 0;
+        cJSON_ArrayForEach(found_dependency, found_dependencies) {
+            cJSON *dep_base = cJSON_GetObjectItemCaseSensitive(found_dependency, "PackageBase");
+            uint8_t base_match = 0;
+            cJSON_ArrayForEach(package, found_packages) {
+                cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
+                if ((!pkg_base) || (!cJSON_IsString(pkg_base)) || (!dep_base) || (!cJSON_IsString(dep_base))) {
                     continue;
                 }
-                uint8_t no_match = 0;
-                uint32_t search_offset = name_length+1 - sizeof(install_match);
-                for (uint16_t idx = search_offset; idx < name_length; idx++) {
-                    if (dir_item->d_name[idx] != install_match[idx-search_offset]) {
-                        no_match = 1;
+                for (uint32_t idx = 0; dep_base->valuestring[idx] == pkg_base->valuestring[idx]; idx++) {
+                    if (dep_base->valuestring[idx] == '\0') {
+                        base_match = 1;
                         break;
                     }
                 }
-                if (!no_match) {
-                    if (dep_install_str_len >= PATH_MAX*((PATH_MAX*2)+2)) {
-                        fprintf(stderr, "Error: Too many packages to list (%d max).\n", PATH_MAX);
-                        free(dep_install_str);
-                        closedir(dir);
-                        if (base_dependencies != NULL) {
-                            for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
-                                free(base_dependencies[idx]);
-                            }
-                            free(base_dependencies);
-                        }
-                        free(built_dep_bases);
-                        free(found_pkg_names);
-                        cJSON_Delete(required_dependencies);
-                        cJSON_Delete(depends_response_body);
-                        cJSON_Delete(response_body);
-                        return 16;
+            }
+            if (base_match) {
+                continue;
+            }
+            required_dependencies_count++;
+            cJSON_AddItemReferenceToArray(required_dependencies, found_dependency);
+        }
+        if (required_dependencies_count > 0) {
+            printf("Downloading dependencies...\n");
+            download_and_extraction_failed = download_and_extract_pkgs(required_dependencies, required_dependencies_count);
+            if (download_and_extraction_failed) {
+                if (base_dependencies != NULL) {
+                    for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
+                        free(base_dependencies[idx]);
                     }
-                    dependency_install_count++;
-                    uint8_t path_written = 0;
-                    for (int32_t idx = 0; path_written < 2; idx++) {
-                        if (path_written) {
-                            if (dir_item->d_name[idx] == '\0') {
-                                dep_install_str[dep_install_str_len] = ' ';
-                                dep_install_str_len++;
-                                path_written = 2;
-                                continue;
-                            }
-                            dep_install_str[dep_install_str_len] = dir_item->d_name[idx];
-                            dep_install_str_len++;
+                    free(base_dependencies);
+                }
+                free(found_pkg_names);
+                cJSON_Delete(required_dependencies);
+                cJSON_Delete(depends_response_body);
+                cJSON_Delete(response_body);
+                return download_and_extraction_failed;
+            }
+        }
+        char **built_dep_bases = malloc((required_dependencies_count) * sizeof(void *));
+        uint32_t built_dep_bases_count = 0;
+        uint32_t dep_install_str_len = 0;
+        uint32_t dependency_install_count = 0;
+        char *dep_install_str = malloc(PATH_MAX*((PATH_MAX*2)+2)+1);
+        cJSON_ArrayForEach(package, required_dependencies) {
+            cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
+            uint8_t base_match = 0;
+            for (uint32_t idx = 0; idx < built_dep_bases_count && idx < found_pkg_arrc; idx++) {
+                for (uint32_t str_idx = 0; pkg_base->valuestring[str_idx] == built_dep_bases[idx][str_idx]; str_idx++) {
+                    if (pkg_base->valuestring[str_idx] == '\0') {
+                        base_match = 1;
+                        break;
+                    }
+                }
+            }
+            if (base_match) {
+                continue;
+            }
+            built_dep_bases[built_dep_bases_count] = pkg_base->valuestring;
+            built_dep_bases_count++;
+            if (required_dependencies_count > 1) {
+                printf("Making Dependency %d/%d \x1b[1m%s\x1b[0m\n", built_dep_bases_count, required_dependencies_count, pkg_base->valuestring);
+            } else {
+                printf("Making Dependency \x1b[1m%s\x1b[0m\n", pkg_base->valuestring);
+            }
+            chdir(pkg_base->valuestring);
+            int makepkg_status_info = system("makepkg -sf");
+            int makepkg_status = WEXITSTATUS(makepkg_status_info);
+            if (makepkg_status || WIFSIGNALED(makepkg_status_info)) {
+                int return_code = 0;
+                if (WIFSIGNALED(makepkg_status_info)) {
+                    if (WTERMSIG(makepkg_status_info) == 2) {
+                        fprintf(stderr, "Makepkg process stopped by user\n");
+                    } else {
+                        fprintf(stderr, "Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
+                    }
+                    return_code = 128 + WTERMSIG(makepkg_status_info);
+                }
+                if (makepkg_status) {
+                    fprintf(stderr, "Error: makepkg error %d\n", makepkg_status);
+                    return_code = 31+ makepkg_status;
+                }
+                if (base_dependencies != NULL) {
+                    for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
+                        free(base_dependencies[idx]);
+                    }
+                    free(base_dependencies);
+                }
+                free(built_dep_bases);
+                free(found_pkg_names);
+                cJSON_Delete(required_dependencies);
+                cJSON_Delete(depends_response_body);
+                cJSON_Delete(response_body);
+                return return_code;
+            }
+            DIR *dir = opendir("./");
+            if (!dir) { 
+                printf("\n");
+                fprintf(stderr, "Error: could not list directory\n"); 
+                free(dep_install_str);
+                if (base_dependencies != NULL) {
+                    for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
+                        free(base_dependencies[idx]);
+                    }
+                    free(base_dependencies);
+                }
+                free(built_dep_bases);
+                free(found_pkg_names);
+                cJSON_Delete(required_dependencies);
+                cJSON_Delete(depends_response_body);
+                cJSON_Delete(response_body);
+                return 13;
+            }
+            struct dirent *dir_item;
+            while ((dir_item = readdir(dir)) != NULL) {
+                if (!(
+                    (dir_item->d_name[0] == '.' && dir_item->d_name[1] == '\0') 
+                    || 
+                    (dir_item->d_name[0] == '.' && dir_item->d_name[1] == '.' && dir_item->d_name[2] == '\0')
+                )) {
+                    char install_match[] = ".pkg.tar.zst";
+                    uint32_t name_length;
+                    for (name_length = 0; dir_item->d_name[name_length] != '\0'; name_length++);
+                    if ((name_length+1) < sizeof(install_match)) {
+                        continue;
+                    }
+                    uint8_t no_match = 0;
+                    uint32_t search_offset = name_length+1 - sizeof(install_match);
+                    for (uint16_t idx = search_offset; idx < name_length; idx++) {
+                        if (dir_item->d_name[idx] != install_match[idx-search_offset]) {
+                            no_match = 1;
+                            break;
                         }
+                    }
+                    if (!no_match) {
+                        if (dep_install_str_len >= PATH_MAX*((PATH_MAX*2)+2)) {
+                            fprintf(stderr, "Error: Too many packages to list (%d max).\n", PATH_MAX);
+                            free(dep_install_str);
+                            closedir(dir);
+                            if (base_dependencies != NULL) {
+                                for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
+                                    free(base_dependencies[idx]);
+                                }
+                                free(base_dependencies);
+                            }
+                            free(built_dep_bases);
+                            free(found_pkg_names);
+                            cJSON_Delete(required_dependencies);
+                            cJSON_Delete(depends_response_body);
+                            cJSON_Delete(response_body);
+                            return 16;
+                        }
+                        dependency_install_count++;
+                        uint8_t path_written = 0;
+                        for (int32_t idx = 0; path_written < 2; idx++) {
+                            if (path_written) {
+                                if (dir_item->d_name[idx] == '\0') {
+                                    dep_install_str[dep_install_str_len] = ' ';
+                                    dep_install_str_len++;
+                                    path_written = 2;
+                                    continue;
+                                }
+                                dep_install_str[dep_install_str_len] = dir_item->d_name[idx];
+                                dep_install_str_len++;
+                            }
 
-                        if (!path_written) {
-                            if (pkg_base->valuestring[idx] == '\0') {
-                                dep_install_str[dep_install_str_len] = '/';
+                            if (!path_written) {
+                                if (pkg_base->valuestring[idx] == '\0') {
+                                    dep_install_str[dep_install_str_len] = '/';
+                                    dep_install_str_len++;
+                                    path_written = 1;
+                                    idx = -1;
+                                    continue;
+                                }
+                                dep_install_str[dep_install_str_len] = pkg_base->valuestring[idx];
                                 dep_install_str_len++;
-                                path_written = 1;
-                                idx = -1;
-                                continue;
                             }
-                            dep_install_str[dep_install_str_len] = pkg_base->valuestring[idx];
-                            dep_install_str_len++;
                         }
                     }
                 }
             }
+            closedir(dir);
+            chdir("..");
         }
-        closedir(dir);
-        chdir("..");
-    }
-    dep_install_str[dep_install_str_len] = '\0';
-    char install_cmd_prefix[] = "sudo pacman -U ";
-    /*
-    dep_install_str_len doesn't include the null terminator but we get the correct length 
-    from install_cmd_prefix's null terminator
-    */
-    char *dep_install_cmd_str = malloc(dep_install_str_len+sizeof(install_cmd_prefix));
-    snprintf(
-        dep_install_cmd_str, 
-        dep_install_str_len+sizeof(install_cmd_prefix), 
-        "%s%s", install_cmd_prefix, dep_install_str
-    );
-    free(dep_install_str);
-    if (dep_install_str_len) {
-        printf("Installing \x1b[1m%d\x1b[0m dependencies...\n", dependency_install_count);
-        int dep_install_info = system(dep_install_cmd_str);
-        int dep_install_status = WEXITSTATUS(dep_install_info);
-        if (dep_install_status || WIFSIGNALED(dep_install_info)) {
-            int return_code = 0;
-            if (WIFSIGNALED(dep_install_info)) {
-                if (WTERMSIG(dep_install_info) == 2) {
-                    fprintf(stderr, "Install process stopped by user\n");
-                } else {
-                    fprintf(stderr, "Install process exited due to signal %d: %s\n", WTERMSIG(dep_install_info), strsignal(WTERMSIG(dep_install_info)));
+        dep_install_str[dep_install_str_len] = '\0';
+        
+        /*
+        dep_install_str_len doesn't include the null terminator but we get the correct length 
+        from install_cmd_prefix's null terminator
+        */
+        char *dep_install_cmd_str = malloc(dep_install_str_len+sizeof(install_cmd_prefix));
+        snprintf(
+            dep_install_cmd_str, 
+            dep_install_str_len+sizeof(install_cmd_prefix), 
+            "%s%s", install_cmd_prefix, dep_install_str
+        );
+        free(dep_install_str);
+        if (dep_install_str_len) {
+            printf("Installing \x1b[1m%d\x1b[0m dependencies...\n", dependency_install_count);
+            int dep_install_info = system(dep_install_cmd_str);
+            int dep_install_status = WEXITSTATUS(dep_install_info);
+            if (dep_install_status || WIFSIGNALED(dep_install_info)) {
+                int return_code = 0;
+                if (WIFSIGNALED(dep_install_info)) {
+                    if (WTERMSIG(dep_install_info) == 2) {
+                        fprintf(stderr, "Install process stopped by user\n");
+                    } else {
+                        fprintf(stderr, "Install process exited due to signal %d: %s\n", WTERMSIG(dep_install_info), strsignal(WTERMSIG(dep_install_info)));
+                    }
+                    return_code = 128 + WTERMSIG(dep_install_info);
                 }
-                return_code = 128 + WTERMSIG(dep_install_info);
-            }
-            if (dep_install_status) {
-                fprintf(stderr, "Error: pacman error %d\n", dep_install_status);
-                return_code = 64;
-            }
-            free(dep_install_cmd_str);
-            if (base_dependencies != NULL) {
-                for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
-                    free(base_dependencies[idx]);
+                if (dep_install_status) {
+                    fprintf(stderr, "Error: pacman error %d\n", dep_install_status);
+                    return_code = 64;
                 }
-                free(base_dependencies);
+                free(dep_install_cmd_str);
+                if (base_dependencies != NULL) {
+                    for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
+                        free(base_dependencies[idx]);
+                    }
+                    free(base_dependencies);
+                }
+                free(built_dep_bases);
+                free(found_pkg_names);
+                cJSON_Delete(required_dependencies);
+                cJSON_Delete(depends_response_body);
+                cJSON_Delete(response_body);
+                return return_code;
             }
-            free(built_dep_bases);
-            free(found_pkg_names);
-            cJSON_Delete(required_dependencies);
-            cJSON_Delete(depends_response_body);
-            cJSON_Delete(response_body);
-            return return_code;
         }
+        free(dep_install_cmd_str);
+        free(built_dep_bases);
+        cJSON_Delete(required_dependencies);
+        cJSON_Delete(depends_response_body);
+    } else {
+        free(all_depends);
     }
-    free(dep_install_cmd_str);
-    free(built_dep_bases);
     char **built_bases = malloc((fetched_bases_count) * sizeof(void *));
     uint32_t built_bases_count = 0;
     uint32_t install_str_len = 0;
@@ -1865,8 +1879,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             free(install_str);
             free(built_bases);
             free(found_pkg_names);
-            cJSON_Delete(required_dependencies);
-            cJSON_Delete(depends_response_body);
             cJSON_Delete(response_body);
             return return_code;
         }
@@ -1883,8 +1895,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             }
             free(built_bases);
             free(found_pkg_names);
-            cJSON_Delete(required_dependencies);
-            cJSON_Delete(depends_response_body);
             cJSON_Delete(response_body);
             return 13;
         }
@@ -1922,8 +1932,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
                         }
                         free(built_bases);
                         free(found_pkg_names);
-                        cJSON_Delete(required_dependencies);
-                        cJSON_Delete(depends_response_body);
                         cJSON_Delete(response_body);
                         return 16;
                     }
@@ -1962,7 +1970,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
     install_str[install_str_len] = '\0';
     
     /*
-    dep_install_str_len doesn't include the null terminator but we get the correct length 
+    install_str_len doesn't include the null terminator but we get the correct length 
     from install_cmd_prefix's null terminator
     */
     char *install_cmd_str = malloc(install_str_len+sizeof(install_cmd_prefix));
@@ -1999,8 +2007,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             }
             free(built_bases);
             free(found_pkg_names);
-            cJSON_Delete(required_dependencies);
-            cJSON_Delete(depends_response_body);
             cJSON_Delete(response_body);
             return return_code;
         }
@@ -2015,8 +2021,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
         free(base_dependencies);
     }
     free(found_pkg_names);
-    cJSON_Delete(required_dependencies);
-    cJSON_Delete(depends_response_body);
     cJSON_Delete(response_body);
     return 0;
     
@@ -2026,8 +2030,310 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
     (void)(options); 
     (void)(arguments);
     (void)(arg_len);
-    printf("cacheless update command has been run\n");
-    return 0;
+    const char DB_PATH[] = "/var/lib/pacman";
+    printf("Checking for newer versions of AUR packages...\n");
+    alpm_errno_t err;
+    alpm_handle_t * handle = alpm_initialize("/", DB_PATH, &err);
+    if (handle == NULL) {
+        fprintf(stderr, "ALPM Error %d: %s\n", err, alpm_strerror(err));
+        return 18;
+    }
+    alpm_db_t * local_db = alpm_get_localdb(handle);
+    alpm_list_t * packages = alpm_db_get_pkgcache(local_db);
+    char sync_dirname[] = "sync";
+    char *sync_dir_path = malloc(sizeof(DB_PATH)+sizeof(sync_dirname));
+    snprintf(sync_dir_path, sizeof(DB_PATH)+sizeof(sync_dirname), "%s/%s", DB_PATH, sync_dirname);
+    DIR *sync_dir = opendir(sync_dir_path);
+    free(sync_dir_path);
+    if (sync_dir == NULL) {
+        fprintf(stderr, "Error: could not list db sync directory\n"); 
+        alpm_release(handle);
+        return 13;
+    }
+    struct dirent *dir_item;
+    while ((dir_item = readdir(sync_dir)) != NULL) {
+        if (
+            (dir_item->d_name[0] == '.' && dir_item->d_name[1] == '\0') 
+            || 
+            (dir_item->d_name[0] == '.' && dir_item->d_name[1] == '.' && dir_item->d_name[2] == '\0')
+        ) {
+            continue;
+        }
+        uint32_t name_size;
+        for (name_size = 0; dir_item->d_name[name_size] != '\0'; name_size++);
+        if (name_size < 3) {
+            continue;
+        }
+        dir_item->d_name[name_size - 3] = '\0';
+        alpm_register_syncdb(handle, dir_item->d_name, 0);
+    }
+    closedir(sync_dir);
+    alpm_list_t *sync_dbs = alpm_get_syncdbs(handle);
+    if (sync_dbs == NULL) {
+        fprintf(stderr, "Error: Can't check for AUR packages due to missing or empty pacman database\n");
+        alpm_release(handle);
+        return 19;
+    }
+    uint32_t install_count = 0;
+    char debug_match[] = "-debug";
+    uint8_t skip = 0;
+    for(alpm_list_t *i = packages; i; i = alpm_list_next(i)) {
+		alpm_pkg_t *pkg = i->data;
+        const char *pkgname = alpm_pkg_get_name(pkg);
+        for(alpm_list_t *j = sync_dbs; j; j = alpm_list_next(j)) {
+            if(alpm_db_get_pkg(j->data, pkgname)) {
+                skip = 1;
+            }
+        }
+        uint8_t matches = 0;
+        uint32_t pkgname_len;
+        for(pkgname_len = 0; pkgname[pkgname_len] != '\0'; pkgname_len++);
+        if (pkgname_len >= 6) {
+            for (uint8_t idx = 0; idx < 6; idx++) {
+                if (debug_match[idx] == pkgname[pkgname_len-(6-idx)]) {
+                    matches++;
+                }
+            }
+        }
+        if (matches == 6) {
+            skip = 1;
+        }
+        for (uint32_t idx = 0; pkgname[idx] == debug_match[idx]; idx++) {
+            if (pkgname[idx] == '\0') {
+                skip = 1;
+                break;
+            }
+        }
+        if (skip){
+            skip = 0;
+            continue;
+        }
+        install_count++;
+    }
+    printf("Checking %u AUR packages...\n", install_count);
+    char **installed_names = malloc(install_count * sizeof(void *));
+    char **installed_versions = malloc(install_count * sizeof(void *));
+    uint32_t install_idx = 0;
+    skip = 0;
+    for(alpm_list_t *i = packages; i; i = alpm_list_next(i)) {
+		alpm_pkg_t *pkg = i->data;
+        const char *pkgname = alpm_pkg_get_name(pkg);
+        const char *pkgver = alpm_pkg_get_version(pkg);
+        uint32_t pkgname_len;
+        for(pkgname_len = 0; pkgname[pkgname_len] != '\0'; pkgname_len++);
+        uint32_t pkgver_len;
+        for(pkgver_len = 0; pkgver[pkgver_len] != '\0'; pkgver_len++);
+
+        for(alpm_list_t *j = sync_dbs; j; j = alpm_list_next(j)) {
+            if(alpm_db_get_pkg(j->data, pkgname)) {
+                skip = 1;
+            }
+        }
+        uint8_t matches = 0;
+        if (pkgname_len >= 6) {
+            for (uint8_t idx = 0; idx < 6; idx++) {
+                if (debug_match[idx] == pkgname[pkgname_len-(6-idx)]) {
+                    matches++;
+                }
+            }
+        }
+        if (matches == 6) {
+            skip = 1;
+        }
+        for (uint32_t idx = 0; pkgname[idx] == debug_match[idx]; idx++) {
+            if (pkgname[idx] == '\0') {
+                skip = 1;
+                break;
+            }
+        }
+        if (skip){
+            skip = 0;
+            continue;
+        }
+        
+        char *to_copy_name = malloc(pkgname_len+1);
+        snprintf(to_copy_name, pkgname_len+1, "%s", pkgname);
+        installed_names[install_idx] = to_copy_name;
+        char *to_copy_version = malloc(pkgver_len+1);
+        snprintf(to_copy_version, pkgver_len+1, "%s", pkgver);
+        installed_versions[install_idx] = to_copy_version;
+        install_idx++;
+    }
+    alpm_release(handle);
+    uint8_t status;
+    /*
+    find_pkg Status Codes:
+    0: OK
+    2: Package not found
+    3: cURL init failed
+    4: cURL perform error 
+    5: HTTP error
+    6: AURWebRTC error
+    7: HTTP response content type was not 'application/json'
+    8: cJSON parsing error
+    9: JSON key error
+    */
+    cJSON *response_body = find_pkg(installed_names, install_count, 0, &status);
+    if (status) {
+        cJSON_Delete(response_body);
+        // written differently as a hacky way to supress false gcc warning.
+        for (uint32_t idx = 0; idx <= install_count-1; idx++) {
+            /* This is the only way to both not trigger the warning and 
+            prevent oob array access caused by unsigned wrap around when install_count is 0.
+            Putting any form of this check anywhere outside the for loop triggers the warning
+            */
+            if (idx < install_count) {
+                free(installed_names[idx]);
+                free(installed_versions[idx]);
+            }
+        }
+        free(installed_names);
+        free(installed_versions);
+        return status;
+    }
+    if (cJSON_IsNull(response_body)) {
+        fprintf(stderr, "Fatal: API metadata went missing.\n");
+        for (uint32_t idx = 0; idx < install_count; idx++) {
+            free(installed_names[idx]);
+            free(installed_versions[idx]);
+        }
+        free(installed_names);
+        free(installed_versions);
+        return 9;
+    }
+    cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
+    if (!found_packages) {
+        cJSON_Delete(response_body);
+        fprintf(stderr, "Fatal: API results went missing.\n");
+        for (uint32_t idx = 0; idx < install_count; idx++) {
+            free(installed_names[idx]);
+            free(installed_versions[idx]);
+        }
+        free(installed_names);
+        free(installed_versions);
+        return 9;
+    }
+    if (!cJSON_GetArraySize(found_packages)) {
+        cJSON_Delete(response_body);
+        fprintf(stderr, "No packages install, exiting...\n");
+        for (uint32_t idx = 0; idx < install_count; idx++) {
+            free(installed_names[idx]);
+            free(installed_versions[idx]);
+        }
+        free(installed_names);
+        free(installed_versions);
+        return 2;
+    }
+    uint32_t found_pkg_arrc = cJSON_GetArraySize(found_packages);
+    const cJSON *package;
+    uint32_t pkg_num = 0;
+    // Note: this will share addresses from installed_names so no need to free() each element or will result in double free.
+    char **needs_update = malloc(found_pkg_arrc * sizeof(void *));
+    uint32_t outdated_count = 0;
+    cJSON_ArrayForEach(package, found_packages) {
+        cJSON *name = cJSON_GetObjectItemCaseSensitive(package, "Name");
+        cJSON *version = cJSON_GetObjectItemCaseSensitive(package, "Version");
+        if (name && name->valuestring && version && cJSON_IsString(version)) {
+            uint32_t outdated = 1;
+            for (uint32_t idx = 0; installed_versions[pkg_num][idx] == version->valuestring[idx]; idx++) {
+                if (version->valuestring[idx] == '\0') {
+                    outdated = 0;
+                    break;
+                }
+            }
+            if (outdated) {
+                // Note: shares addresses from installed_names
+                needs_update[outdated_count] = installed_names[pkg_num];
+                outdated_count++;
+            }
+        }
+        pkg_num++;
+    }
+    if (!outdated_count) {
+        printf("\x1b[1mAll installed AUR packages are up to date\x1b[0m\n");
+        // free everything
+        cJSON_Delete(response_body);
+        for (uint32_t idx = 0; idx < install_count; idx++) {
+            // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
+            free(installed_names[idx]);
+            free(installed_versions[idx]);
+        }
+        free(needs_update);
+        free(installed_names);
+        free(installed_versions);
+        return 0;
+    }
+    printf("%u AUR packages can be upgraded:\n    ", outdated_count);
+    for (uint32_t stringsi = 0; stringsi < outdated_count; stringsi++) {
+        if (stringsi) {
+            printf(" ");
+        }
+        printf("%s", needs_update[stringsi]);
+    }
+    printf("\n");
+    printf("Upgrade these packages now? [Y/n]: ");
+    char prompt[6];
+    char *input_successful = fgets(prompt, sizeof(prompt), stdin);
+    if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
+        // free everything
+        cJSON_Delete(response_body);
+        for (uint32_t idx = 0; idx < install_count; idx++) {
+            // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
+            free(installed_names[idx]);
+            free(installed_versions[idx]);
+        }
+        free(needs_update);
+        free(installed_names);
+        free(installed_versions);
+        return 0;
+    }
+    printf("It is recommended to run pacman -Syu before upgrading these packages\n");
+    printf("Note: pass the s argument to skip running running pacman -Syu\n");
+    int pacman_status = system("sudo pacman -Syu");
+    int pacman_failed = WEXITSTATUS(pacman_status);
+    if (WIFSIGNALED(pacman_status)) {
+        if (WTERMSIG(pacman_status) == 2) {
+            fprintf(stderr, "Pacman stopped by user\n");
+        } else {
+            fprintf(
+                stderr, "Pacman exited due to signal %d: %s\n", 
+                WTERMSIG(pacman_status), strsignal(WTERMSIG(pacman_status)));
+        }cJSON_Delete(response_body);
+        for (uint32_t idx = 0; idx < install_count; idx++) {
+            // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
+            free(installed_names[idx]);
+            free(installed_versions[idx]);
+        }
+        free(needs_update);
+        free(installed_names);
+        free(installed_versions);
+        return 128+WTERMSIG(pacman_status);
+    }
+    if (pacman_failed) {
+        fprintf(stderr, "Error: Pacman failed with exit code %d\n", pacman_failed);
+        cJSON_Delete(response_body);
+        for (uint32_t idx = 0; idx < install_count; idx++) {
+            // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
+            free(installed_names[idx]);
+            free(installed_versions[idx]);
+        }
+        free(needs_update);
+        free(installed_names);
+        free(installed_versions);
+        return 64;
+    }
+    uint8_t return_code = command_i(options, needs_update, outdated_count);
+    cJSON_Delete(response_body);
+    for (uint32_t idx = 0; idx < install_count; idx++) {
+        // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
+        free(installed_names[idx]);
+        free(installed_versions[idx]);
+    }
+    free(needs_update);
+    free(installed_names);
+    free(installed_versions);
+    // printf("%u\n", install_count);
+    return return_code;
 }
 
 int command_u(char *options, char *arguments[], int32_t arg_len) {
