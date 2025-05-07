@@ -2027,9 +2027,9 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
 }
 
 int command_c(char *options, char *arguments[], int32_t arg_len) {
-    (void)(options); 
     (void)(arguments);
     (void)(arg_len);
+    // todo: add proper options for this command.
     const char DB_PATH[] = "/var/lib/pacman";
     printf("Checking for newer versions of AUR packages...\n");
     alpm_errno_t err;
@@ -2288,7 +2288,8 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
         return 0;
     }
     printf("It is recommended to run pacman -Syu before upgrading these packages\n");
-    printf("Note: pass the s argument to skip running running pacman -Syu\n");
+    // todo: implement pacman -Syu skipping
+    // printf("Note: pass the s argument to skip running running pacman -Syu\n");
     int pacman_status = system("sudo pacman -Syu");
     int pacman_failed = WEXITSTATUS(pacman_status);
     if (WIFSIGNALED(pacman_status)) {
