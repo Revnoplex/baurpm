@@ -1545,6 +1545,8 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
     // }
     // printf("\n");
     char install_cmd_prefix[] = "sudo pacman -U ";
+    char **install_files = malloc(PATH_MAX * sizeof(void *));
+    uint16_t install_files_count = 0;
     if (actual_depends) {
         printf("Fetching dependencies...\n");
         cJSON *depends_response_body = find_pkg(all_depends, actual_depends, 1, &status);
@@ -1559,6 +1561,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             }
             free(found_pkg_names);
             cJSON_Delete(response_body);
+            free(install_files);
             return status;
         }
         if (cJSON_IsNull(depends_response_body)) {
@@ -1571,6 +1574,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             }
             free(found_pkg_names);
             cJSON_Delete(response_body);
+            free(install_files);
             return 9;
         }
         cJSON *found_dependencies = cJSON_GetObjectItemCaseSensitive(depends_response_body, "results");
@@ -1585,6 +1589,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             }
             free(found_pkg_names);
             cJSON_Delete(response_body);
+            free(install_files);
             return 9;
         }
         cJSON *found_dependency = NULL;
@@ -1626,6 +1631,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
                 cJSON_Delete(required_dependencies);
                 cJSON_Delete(depends_response_body);
                 cJSON_Delete(response_body);
+                free(install_files);
                 return download_and_extraction_failed;
             }
         }
@@ -1683,6 +1689,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
                 cJSON_Delete(required_dependencies);
                 cJSON_Delete(depends_response_body);
                 cJSON_Delete(response_body);
+                free(install_files);
                 return return_code;
             }
             DIR *dir = opendir("./");
@@ -1701,6 +1708,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
                 cJSON_Delete(required_dependencies);
                 cJSON_Delete(depends_response_body);
                 cJSON_Delete(response_body);
+                free(install_files);
                 return 13;
             }
             struct dirent *dir_item;
@@ -1740,9 +1748,18 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
                             cJSON_Delete(required_dependencies);
                             cJSON_Delete(depends_response_body);
                             cJSON_Delete(response_body);
+                            free(install_files);
                             return 16;
                         }
                         dependency_install_count++;
+                        uint32_t d_name_size;
+                        for (d_name_size = 0; dir_item->d_name[d_name_size] != '\0'; d_name_size++);
+                        uint32_t pkg_str_size;
+                        for (pkg_str_size = 0; pkg_base->valuestring[pkg_str_size] != '\0'; pkg_str_size++);
+                        char *install_file_path = malloc(d_name_size+pkg_str_size+2);
+                        snprintf(install_file_path, d_name_size+pkg_str_size+2, "%s/%s", pkg_base->valuestring, dir_item->d_name);
+                        install_files[install_files_count] = install_file_path;
+                        install_files_count++;
                         uint8_t path_written = 0;
                         for (int32_t idx = 0; path_written < 2; idx++) {
                             if (path_written) {
@@ -1817,6 +1834,10 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
                 cJSON_Delete(required_dependencies);
                 cJSON_Delete(depends_response_body);
                 cJSON_Delete(response_body);
+                for (uint32_t idx = 0; idx < install_files_count; idx++){
+                    free(install_files[idx]);
+                }
+                free(install_files);
                 return return_code;
             }
         }
@@ -1880,6 +1901,10 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             free(built_bases);
             free(found_pkg_names);
             cJSON_Delete(response_body);
+            for (uint32_t idx = 0; idx < install_files_count; idx++){
+                free(install_files[idx]);
+            }
+            free(install_files);
             return return_code;
         }
         DIR *dir = opendir("./");
@@ -1896,6 +1921,10 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             free(built_bases);
             free(found_pkg_names);
             cJSON_Delete(response_body);
+            for (uint32_t idx = 0; idx < install_files_count; idx++){
+                free(install_files[idx]);
+            }
+            free(install_files);
             return 13;
         }
         struct dirent *dir_item;
@@ -1933,9 +1962,21 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
                         free(built_bases);
                         free(found_pkg_names);
                         cJSON_Delete(response_body);
+                        for (uint32_t idx = 0; idx < install_files_count; idx++){
+                            free(install_files[idx]);
+                        }
+                        free(install_files);
                         return 16;
                     }
                     install_count++;
+                    uint32_t d_name_size;
+                    for (d_name_size = 0; dir_item->d_name[d_name_size] != '\0'; d_name_size++);
+                    uint32_t pkg_str_size;
+                    for (pkg_str_size = 0; pkg_base->valuestring[pkg_str_size] != '\0'; pkg_str_size++);
+                    char *install_file_path = malloc(d_name_size+pkg_str_size+2);
+                    snprintf(install_file_path, d_name_size+pkg_str_size+2, "%s/%s", pkg_base->valuestring, dir_item->d_name);
+                    install_files[install_files_count] = install_file_path;
+                    install_files_count++;
                     uint8_t path_written = 0;
                     for (int32_t idx = 0; path_written < 2; idx++) {
                         if (path_written) {
@@ -2011,6 +2052,11 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             return return_code;
         }
     }
+    for (uint32_t idx = 0; idx < install_files_count; idx++){
+        remove(install_files[idx]);
+        free(install_files[idx]);
+    }
+    free(install_files);
     free(install_cmd_str);
     free(built_bases);
     printf("Installation Completed\n");
