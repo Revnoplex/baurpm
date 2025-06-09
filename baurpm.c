@@ -23,7 +23,7 @@ const char *LICENSE = "MIT";
 const char *COPYRIGHT = "Copyright (c) 2022-2025";
 const char AUR_BASE_URL[] = "https://aur.archlinux.org";
 
-typedef int (*stdcall)(char *, char *[], int32_t);
+typedef int (*stdcall)(char *, char *[], int32_t, cJSON *);
 
 struct memory {
     /*
@@ -780,7 +780,8 @@ struct commandDocs {
     char *options[7][8];
 };
 
-int command_h(char *options, char *arguments[], int32_t arg_len) {
+int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
+    cJSON_Delete(_);
     (void)(options);
     struct commandDocs command_docs = {
         { 'H', 'G', 'I', 'C', 'U', 'V', 'A' },
@@ -872,7 +873,8 @@ int command_h(char *options, char *arguments[], int32_t arg_len) {
 
 }
 
-int command_g(char *options, char *arguments[], int32_t arg_len) {
+int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
+    cJSON_Delete(_);
     (void)(options);
     if (!arg_len) {
         fprintf(stderr, "No package names specified!\nFor usage, see %s -H for details\n", SHORT_NAME);
@@ -1157,7 +1159,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len) {
     return 0;
 }
 
-int command_i(char *options, char *arguments[], int32_t arg_len) {
+int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_data) {
     uint8_t skip_missing = 0;
     uint8_t skip_review = 0;
     for (uint32_t idx = 0; options[idx] != '\0'; idx++) {
@@ -1171,34 +1173,46 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
     }
     if (!arg_len) {
         fprintf(stderr, "No package names specified!\nFor usage, see %s -H for details\n", SHORT_NAME);
+        if (cJSON_IsNull(package_data)) {
+            cJSON_Delete(package_data);
+        }
         return 1;
     }
-    printf("Searching for \x1b[1m");
-    print_string_array(arguments, arg_len);
-    printf("\x1b[0m\n");
+    cJSON *response_body = NULL;
+    cJSON *found_packages = NULL;
     uint8_t status;
-    /*
-    find_pkg Status Codes:
-    0: OK
-    2: Package not found
-    3: cURL init failed
-    4: cURL perform error 
-    5: HTTP error
-    6: AURWebRTC error
-    7: HTTP response content type was not 'application/json'
-    8: cJSON parsing error
-    9: JSON key error
-    */
-    cJSON *response_body = find_pkg(arguments, arg_len, skip_missing, &status);
-    if (status) {
-        cJSON_Delete(response_body);
-        return status;
+    if (!cJSON_IsNull(package_data)) {
+        printf("Using pre-fetched package data...\n");
+        found_packages = package_data;
+    } else {
+        cJSON_Delete(package_data);
+    
+        printf("Searching for \x1b[1m");
+        print_string_array(arguments, arg_len);
+        printf("\x1b[0m\n");
+        /*
+        find_pkg Status Codes:
+        0: OK
+        2: Package not found
+        3: cURL init failed
+        4: cURL perform error 
+        5: HTTP error
+        6: AURWebRTC error
+        7: HTTP response content type was not 'application/json'
+        8: cJSON parsing error
+        9: JSON key error
+        */
+        response_body = find_pkg(arguments, arg_len, skip_missing, &status);
+        if (status) {
+            cJSON_Delete(response_body);
+            return status;
+        }
+        if (cJSON_IsNull(response_body)) {
+            fprintf(stderr, "Fatal: API metadata went missing.\n");
+            return 9;
+        }
+        found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     }
-    if (cJSON_IsNull(response_body)) {
-        fprintf(stderr, "Fatal: API metadata went missing.\n");
-        return 9;
-    }
-    cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     if (!found_packages) {
         fprintf(stderr, "Fatal: API results went missing.\n");
         cJSON_Delete(response_body);
@@ -1220,20 +1234,23 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
             pkgsc++;
         }
     }
-    if (pkgsc == 1) {
-        printf("A package called \033[1m%s\033[0m was found.\nMake and install the package? [Y/n]: ", found_pkg_names[0]);
-    } else {
-        printf("Some packages called \033[1m");
-        print_string_array(found_pkg_names, pkgsc);
-        printf("\033[0m were found.\nMake and install the packages? [Y/n]: ");
-    }
+    char *input_successful = NULL;
     char prompt[6];
-    char *input_successful = fgets(prompt, sizeof(prompt), stdin);
-    if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
-        printf("Installation aborted\n");
-        free(found_pkg_names);
-        cJSON_Delete(response_body);
-        return 0;
+    if (cJSON_IsNull(package_data)) {
+        if (pkgsc == 1) {
+            printf("A package called \033[1m%s\033[0m was found.\nMake and install the package? [Y/n]: ", found_pkg_names[0]);
+        } else {
+            printf("Some packages called \033[1m");
+            print_string_array(found_pkg_names, pkgsc);
+            printf("\033[0m were found.\nMake and install the packages? [Y/n]: ");
+        }
+        input_successful = fgets(prompt, sizeof(prompt), stdin);
+        if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
+            printf("Installation aborted\n");
+            free(found_pkg_names);
+            cJSON_Delete(response_body);
+            return 0;
+        }
     }
     printf("Downloading packages...\n");
     uint32_t download_and_extraction_failed = download_and_extract_pkgs(found_packages, found_pkg_arrc);
@@ -2073,7 +2090,8 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
     
 }
 
-int command_c(char *options, char *arguments[], int32_t arg_len) {
+int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
+    cJSON_Delete(_);
     (void)(arguments);
     (void)(arg_len);
     uint8_t skip_missing = 0;
@@ -2291,13 +2309,15 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
     uint32_t pkg_num = 0;
     // Note: this will share addresses from installed_names so no need to free() each element or will result in double free.
     char **needs_update = malloc(found_pkg_arrc * sizeof(void *));
+    cJSON *package_data = cJSON_CreateArray();
     uint32_t outdated_count = 0;
     cJSON_ArrayForEach(package, found_packages) {
         cJSON *name = cJSON_GetObjectItemCaseSensitive(package, "Name");
         cJSON *version = cJSON_GetObjectItemCaseSensitive(package, "Version");
         if (name && name->valuestring && version && cJSON_IsString(version)) {
             uint32_t outdated = 1;
-            for (uint32_t idx = 0; installed_versions[pkg_num][idx] == version->valuestring[idx]; idx++) {
+            // simulation case, remove later
+            for (uint32_t idx = 0; installed_versions[pkg_num][idx] == version->valuestring[idx] && name->valuestring[0] != 'c'; idx++) {
                 if (version->valuestring[idx] == '\0') {
                     outdated = 0;
                     break;
@@ -2306,6 +2326,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
             if (outdated) {
                 // Note: shares addresses from installed_names
                 needs_update[outdated_count] = installed_names[pkg_num];
+                cJSON_AddItemReferenceToArray(package_data, (cJSON *) package);
                 outdated_count++;
             }
         }
@@ -2320,6 +2341,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
             free(installed_names[idx]);
             free(installed_versions[idx]);
         }
+        cJSON_Delete(package_data);
         free(needs_update);
         free(installed_names);
         free(installed_versions);
@@ -2344,6 +2366,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
             free(installed_names[idx]);
             free(installed_versions[idx]);
         }
+        cJSON_Delete(package_data);
         free(needs_update);
         free(installed_names);
         free(installed_versions);
@@ -2373,6 +2396,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
                     free(installed_names[idx]);
                     free(installed_versions[idx]);
                 }
+                cJSON_Delete(package_data);
                 free(needs_update);
                 free(installed_names);
                 free(installed_versions);
@@ -2386,6 +2410,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
                     free(installed_names[idx]);
                     free(installed_versions[idx]);
                 }
+                cJSON_Delete(package_data);
                 free(needs_update);
                 free(installed_names);
                 free(installed_versions);
@@ -2413,6 +2438,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
                 free(installed_names[idx]);
                 free(installed_versions[idx]);
             }
+            cJSON_Delete(package_data);
             free(needs_update);
             free(installed_names);
             free(installed_versions);
@@ -2420,6 +2446,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
         }
         if (pacman_failed) {
             fprintf(stderr, "Error: Pacman failed with exit code %d\n", pacman_failed);
+            cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             for (uint32_t idx = 0; idx < install_count; idx++) {
                 // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
@@ -2432,7 +2459,8 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
             return 64;
         }
     }
-    uint8_t return_code = command_i(options, needs_update, outdated_count);
+    uint8_t return_code = command_i(options, needs_update, outdated_count, package_data);
+    cJSON_Delete(package_data);
     cJSON_Delete(response_body);
     for (uint32_t idx = 0; idx < install_count; idx++) {
         // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
@@ -2446,7 +2474,8 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
     return return_code;
 }
 
-int command_u(char *options, char *arguments[], int32_t arg_len) {
+int command_u(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
+    cJSON_Delete(_);
     (void)(options); 
     (void)(arguments);
     (void)(arg_len);
@@ -2454,7 +2483,8 @@ int command_u(char *options, char *arguments[], int32_t arg_len) {
     return 0;
 }
 
-int command_v(char *options, char *arguments[], int32_t arg_len) {
+int command_v(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
+    cJSON_Delete(_);
     (void)(options); 
     (void)(arguments);
     (void)(arg_len);
@@ -2477,7 +2507,10 @@ int command_v(char *options, char *arguments[], int32_t arg_len) {
     return 0;
 }
 
-int command_a(char *options, char *arguments[], int32_t arg_len) {
+int command_a(char *options, char *arguments[], int32_t arg_len, cJSON *package_data) {
+    if (cJSON_IsNull(package_data)) {
+        cJSON_Delete(package_data);
+    }
     (void)(options); 
     (void)(arguments);
     (void)(arg_len);
@@ -2545,7 +2578,7 @@ int main(int32_t argc, char *argv[]) {
         uint8_t cmd_idx;
         for (cmd_idx = 0; cmd_idx < 7; cmd_idx++) {
             if ((cmd_name | 32) == name_lookup[cmd_idx]) {
-                return_code = function_lookup[cmd_idx](cmd_opts, command_args, argc-2);
+                return_code = function_lookup[cmd_idx](cmd_opts, command_args, argc-2, cJSON_CreateNull());
                 free(command_args);
                 break;
             } else if (cmd_idx == 6) {
