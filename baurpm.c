@@ -805,10 +805,11 @@ int command_h(char *options, char *arguments[], int32_t arg_len) {
         {
             { "" },
             { "" },
-            { "f: Ignore any missing packages", "n: Skip Reading PKGBUILD files", "" }, 
+            { "f: Ignore any missing packages", "n: Skip reading PKGBUILD files", "" }, 
             { 
                 "i, <packages>: Ignore upgrading packages specified", 
                 "f: Ignore any missing packages", 
+                "n: Skip reading PKGBUILD files",
                 "s: Skip running pacman -Syu",
                 "k: Upgrade archlinux-keyring first",
                 ""
@@ -2075,6 +2076,21 @@ int command_i(char *options, char *arguments[], int32_t arg_len) {
 int command_c(char *options, char *arguments[], int32_t arg_len) {
     (void)(arguments);
     (void)(arg_len);
+    uint8_t skip_missing = 0;
+    uint8_t skip_upgrade = 0;
+    uint8_t upgrade_keyring = 0;
+    for (uint32_t idx = 0; options[idx] != '\0'; idx++) {
+        switch (options[idx]) {
+            case 'f':
+                skip_missing = 1;
+                break;
+            case 'k':
+                upgrade_keyring = 1;
+                break;
+            case 's':
+                skip_upgrade = 1;
+        }
+    }
     // todo: add proper options for this command.
     const char DB_PATH[] = "/var/lib/pacman";
     printf("Checking for newer versions of AUR packages...\n");
@@ -2219,7 +2235,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
     8: cJSON parsing error
     9: JSON key error
     */
-    cJSON *response_body = find_pkg(installed_names, install_count, 0, &status);
+    cJSON *response_body = find_pkg(installed_names, install_count, skip_missing, &status);
     if (status) {
         cJSON_Delete(response_body);
         // written differently as a hacky way to supress false gcc warning.
@@ -2334,40 +2350,87 @@ int command_c(char *options, char *arguments[], int32_t arg_len) {
         return 0;
     }
     printf("It is recommended to run pacman -Syu before upgrading these packages\n");
-    // todo: implement pacman -Syu skipping
-    // printf("Note: pass the s argument to skip running running pacman -Syu\n");
-    int pacman_status = system("sudo pacman -Syu");
-    int pacman_failed = WEXITSTATUS(pacman_status);
-    if (WIFSIGNALED(pacman_status)) {
-        if (WTERMSIG(pacman_status) == 2) {
-            fprintf(stderr, "Pacman stopped by user\n");
-        } else {
-            fprintf(
-                stderr, "Pacman exited due to signal %d: %s\n", 
-                WTERMSIG(pacman_status), strsignal(WTERMSIG(pacman_status)));
-        }cJSON_Delete(response_body);
-        for (uint32_t idx = 0; idx < install_count; idx++) {
-            // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
-            free(installed_names[idx]);
-            free(installed_versions[idx]);
+    if (!skip_upgrade) {
+        printf("Note: pass the s argument to skip running running pacman -Syu\n");
+        printf(
+            "Note: If you run into package signature errors, " 
+            "try upgrading the archlinux-keyring by passing the k argument\n"
+        );
+        if (upgrade_keyring) {
+            printf("Attempting to upgrade archlinux-keyring first to prevent signature errors...\n");
+            int keyring_status = system("sudo pacman -Sy archlinux-keyring");
+            int keyring_failed = WEXITSTATUS(keyring_status);
+            if (WIFSIGNALED(keyring_status)) {
+                if (WTERMSIG(keyring_status) == 2) {
+                    fprintf(stderr, "Pacman stopped by user\n");
+                } else {
+                    fprintf(
+                        stderr, "Pacman exited due to signal %d: %s\n", 
+                        WTERMSIG(keyring_status), strsignal(WTERMSIG(keyring_status)));
+                }cJSON_Delete(response_body);
+                for (uint32_t idx = 0; idx < install_count; idx++) {
+                    // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
+                    free(installed_names[idx]);
+                    free(installed_versions[idx]);
+                }
+                free(needs_update);
+                free(installed_names);
+                free(installed_versions);
+                return 128+WTERMSIG(keyring_status);
+            }
+            if (keyring_failed) {
+                fprintf(stderr, "Error: Pacman failed with exit code %d\n", keyring_failed);
+                cJSON_Delete(response_body);
+                for (uint32_t idx = 0; idx < install_count; idx++) {
+                    // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
+                    free(installed_names[idx]);
+                    free(installed_versions[idx]);
+                }
+                free(needs_update);
+                free(installed_names);
+                free(installed_versions);
+                return 64;
+            }
+            printf("Successfully upgraded archlinux-keyring\n");
+            printf(
+                "\x1b[1;33mWARNING\x1b[0m: The system has been \x1b[mPARTIALLY UPGRADED!\x1b[0m "
+                "In other words aborting now and not fully upgrading with pacman -Syu may leave your "
+                "system in a broken state! So please let it run or do it manually\n"
+            );
         }
-        free(needs_update);
-        free(installed_names);
-        free(installed_versions);
-        return 128+WTERMSIG(pacman_status);
-    }
-    if (pacman_failed) {
-        fprintf(stderr, "Error: Pacman failed with exit code %d\n", pacman_failed);
-        cJSON_Delete(response_body);
-        for (uint32_t idx = 0; idx < install_count; idx++) {
-            // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
-            free(installed_names[idx]);
-            free(installed_versions[idx]);
+        int pacman_status = system("sudo pacman -Syu");
+        int pacman_failed = WEXITSTATUS(pacman_status);
+        if (WIFSIGNALED(pacman_status)) {
+            if (WTERMSIG(pacman_status) == 2) {
+                fprintf(stderr, "Pacman stopped by user\n");
+            } else {
+                fprintf(
+                    stderr, "Pacman exited due to signal %d: %s\n", 
+                    WTERMSIG(pacman_status), strsignal(WTERMSIG(pacman_status)));
+            }cJSON_Delete(response_body);
+            for (uint32_t idx = 0; idx < install_count; idx++) {
+                // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
+                free(installed_names[idx]);
+                free(installed_versions[idx]);
+            }
+            free(needs_update);
+            free(installed_names);
+            free(installed_versions);
+            return 128+WTERMSIG(pacman_status);
         }
-        free(needs_update);
-        free(installed_names);
-        free(installed_versions);
-        return 64;
+        if (pacman_failed) {
+            fprintf(stderr, "Error: Pacman failed with exit code %d\n", pacman_failed);
+            cJSON_Delete(response_body);
+            for (uint32_t idx = 0; idx < install_count; idx++) {
+                // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
+                free(installed_names[idx]);
+                free(installed_versions[idx]);
+            }
+            free(needs_update);
+            free(installed_names);
+            free(installed_versions);
+            return 64;
+        }
     }
     uint8_t return_code = command_i(options, needs_update, outdated_count);
     cJSON_Delete(response_body);
