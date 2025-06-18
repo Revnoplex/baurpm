@@ -2316,8 +2316,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         cJSON *version = cJSON_GetObjectItemCaseSensitive(package, "Version");
         if (name && name->valuestring && version && cJSON_IsString(version)) {
             uint32_t outdated = 1;
-            // simulation case, remove later
-            for (uint32_t idx = 0; installed_versions[pkg_num][idx] == version->valuestring[idx] && name->valuestring[0] != 'c'; idx++) {
+            for (uint32_t idx = 0; installed_versions[pkg_num][idx] == version->valuestring[idx]; idx++) {
                 if (version->valuestring[idx] == '\0') {
                     outdated = 0;
                     break;
