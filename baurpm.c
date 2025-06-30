@@ -15,13 +15,13 @@
 #include <alpm.h>
 #include <alpm_list.h>
 
-const char *LONG_NAME = "Basic Arch User Repository (AUR) Package Manager";
-const char *SHORT_NAME = "baurpm";
-const char *VERSION = "0.1.0a";
-const char *AUTHOR = "Revnoplex";
-const char *LICENSE = "MIT";
-const char *COPYRIGHT = "Copyright (c) 2022-2025";
-const char AUR_BASE_URL[] = "https://aur.archlinux.org";
+#define LONG_NAME "Basic Arch User Repository (AUR) Package Manager"
+#define SHORT_NAME "baurpm"
+#define VERSION "0.1.0a"
+#define AUTHOR "Revnoplex"
+#define LICENSE "MIT"
+#define COPYRIGHT "Copyright (c) 2022-2025"
+#define AUR_BASE_URL "https://aur.archlinux.org"
 
 typedef int (*stdcall)(char *, char *[], int32_t, cJSON *);
 
@@ -2110,7 +2110,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
     }
     // todo: add proper options for this command.
-    const char DB_PATH[] = "/var/lib/pacman";
+    #define DB_PATH "/var/lib/pacman"
     printf("Checking for newer versions of AUR packages...\n");
     alpm_errno_t err;
     alpm_handle_t * handle = alpm_initialize("/", DB_PATH, &err);
