@@ -1259,15 +1259,64 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         cJSON_Delete(response_body);
         return download_and_extraction_failed;
     }
+    char **fetched_bases = malloc(found_pkg_arrc * sizeof(void *));
+    uint32_t fetched_bases_count = 0;
+    cJSON_ArrayForEach(package, found_packages) {
+        cJSON *pkg_name = cJSON_GetObjectItemCaseSensitive(package, "Name");
+        cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
+        uint8_t different_base = 0;
+        for (uint32_t idx = 0; pkg_name->valuestring[idx] != '\0'; idx++) {
+            if (pkg_name->valuestring[idx] != pkg_base->valuestring[idx]) {
+                different_base = 1;
+                break;
+            }
+        }
+        if (different_base) {
+            printf(
+                "Note: %s has a different package base called %s.\n", 
+                pkg_name->valuestring, pkg_base->valuestring
+            );
+        }
+        uint8_t base_match = 0;
+        for (uint32_t idx = 0; idx < fetched_bases_count && idx < found_pkg_arrc; idx++) {
+            for (uint32_t str_idx = 0; pkg_base->valuestring[str_idx] == fetched_bases[idx][str_idx]; str_idx++) {
+                if (pkg_base->valuestring[str_idx] == '\0') {
+                    base_match = 1;
+                    break;
+                }
+            }
+        }
+        if (base_match) {
+            continue;
+        }
+        fetched_bases[fetched_bases_count] = pkg_base->valuestring;
+        fetched_bases_count++;
+    }
     if (!skip_review) {
+        char **viewed_bases = malloc((fetched_bases_count) * sizeof(void *));
+        uint32_t viewed_bases_count = 0;
         cJSON_ArrayForEach(package, found_packages) {
             cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
-
+            uint8_t base_match = 0;
+            for (uint32_t idx = 0; idx < viewed_bases_count && idx < found_pkg_arrc; idx++) {
+                for (uint32_t str_idx = 0; pkg_base->valuestring[str_idx] == viewed_bases[idx][str_idx]; str_idx++) {
+                    if (pkg_base->valuestring[str_idx] == '\0') {
+                        base_match = 1;
+                        break;
+                    }
+                }
+            }
+            if (base_match) {
+                continue;
+            }
+            viewed_bases[viewed_bases_count] = pkg_base->valuestring;
+            viewed_bases_count++;
             printf("Build files for \033[1m%s\033[0m are:\n     ", pkg_base->valuestring);
             DIR *dir = opendir(pkg_base->valuestring);
             if (!dir) { 
                 printf("\n");
                 fprintf(stderr, "Error: could not list directory\n"); 
+                free(viewed_bases);
                 free(found_pkg_names);
                 cJSON_Delete(response_body);
                 return 13;
@@ -1305,6 +1354,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             }
             chdir("..");
         }
+        free(viewed_bases);
         printf("Continue Installation? [Y/n]: ");
         input_successful = fgets(prompt, sizeof(prompt), stdin);
         if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
@@ -1324,25 +1374,10 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         "Please make sure all your packages are up to date or face the rick of a partial upgrade\n"
     );
     char **base_dependencies = NULL;
-    char **fetched_bases = malloc(found_pkg_arrc * sizeof(void *));
     uint32_t base_dependencies_amount = 0;
-    uint32_t fetched_bases_count = 0;
     cJSON_ArrayForEach(package, found_packages) {
         cJSON *pkg_name = cJSON_GetObjectItemCaseSensitive(package, "Name");
         cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
-        uint8_t different_base = 0;
-        for (uint32_t idx = 0; pkg_name->valuestring[idx] != '\0'; idx++) {
-            if (pkg_name->valuestring[idx] != pkg_base->valuestring[idx]) {
-                different_base = 1;
-                break;
-            }
-        }
-        if (different_base) {
-            printf(
-                "Note: %s has a different package base called %s.\n", 
-                pkg_name->valuestring, pkg_base->valuestring
-            );
-        }
         uint8_t base_match = 0;
         for (uint32_t idx = 0; idx < fetched_bases_count && idx < found_pkg_arrc; idx++) {
             for (uint32_t str_idx = 0; pkg_base->valuestring[str_idx] == fetched_bases[idx][str_idx]; str_idx++) {
@@ -1355,8 +1390,13 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         if (base_match) {
             continue;
         }
-        fetched_bases[fetched_bases_count] = pkg_base->valuestring;
-        fetched_bases_count++;
+        uint8_t different_base = 0;
+        for (uint32_t idx = 0; pkg_name->valuestring[idx] != '\0'; idx++) {
+            if (pkg_name->valuestring[idx] != pkg_base->valuestring[idx]) {
+                different_base = 1;
+                break;
+            }
+        }
         if (different_base) {
             chdir(pkg_base->valuestring);
             struct stat stat_info;
