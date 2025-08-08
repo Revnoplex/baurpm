@@ -2104,6 +2104,11 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 }
                 free(base_dependencies);
             }
+            for (uint32_t idx = 0; idx < install_files_count; idx++){
+                remove(install_files[idx]);
+                free(install_files[idx]);
+            }
+            free(install_files);
             free(built_bases);
             free(found_pkg_names);
             cJSON_Delete(response_body);
