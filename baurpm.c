@@ -2356,6 +2356,16 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         cJSON *version = cJSON_GetObjectItemCaseSensitive(package, "Version");
         if (name && name->valuestring && version && cJSON_IsString(version)) {
             uint32_t outdated = 1;
+            uint32_t missing = 1;
+            for (uint32_t idx = 0; installed_names[pkg_num][idx] == name->valuestring[idx]; idx++) {
+                if (name->valuestring[idx] == '\0') {
+                    missing = 0;
+                    break;
+                }
+            }
+            if (missing) {
+                pkg_num++;
+            }
             for (uint32_t idx = 0; installed_versions[pkg_num][idx] == version->valuestring[idx]; idx++) {
                 if (version->valuestring[idx] == '\0') {
                     outdated = 0;
