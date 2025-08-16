@@ -1,6 +1,6 @@
 ![C](https://img.shields.io/badge/-C-ffffff?style=for-the-badge&logo=c)
 ![CURL](https://img.shields.io/badge/-CURL-0a3754?style=for-the-badge&logo=curl)
-
+![cJSON](https://img.shields.io/badge/-cJSON-000000?style=for-the-badge&logo=json)
 
 # BAURPM
 Basic Arch User Repository (AUR) Package Manager
