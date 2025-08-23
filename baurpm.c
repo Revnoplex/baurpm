@@ -2444,7 +2444,8 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                     fprintf(
                         stderr, "Pacman exited due to signal %d: %s\n", 
                         WTERMSIG(keyring_status), strsignal(WTERMSIG(keyring_status)));
-                }cJSON_Delete(response_body);
+                }
+                cJSON_Delete(response_body);
                 for (uint32_t idx = 0; idx < install_count; idx++) {
                     // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
                     free(installed_names[idx]);
