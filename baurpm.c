@@ -93,7 +93,7 @@ static int copy_data(struct archive *ar, struct archive *aw) {
 			return (r);
 		r = archive_write_data_block(aw, buff, size, offset);
 		if (r != ARCHIVE_OK) {
-            fprintf(stderr, "Warning: archive_write_data_block() failed: %s\n", archive_error_string(aw));
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: archive_write_data_block() failed: %s\n", archive_error_string(aw));
 			return (r);
 		}
 	}
@@ -106,7 +106,7 @@ static int extract(const char *filename) {
     The above source file in the URL is in the public domain.
     The code below has been modified to match specific needs.
     */
-    const char *err_msg_prefix = "An error occurred while extracting the package: "; 
+    const char *err_msg_prefix = "\x1b[1;31mFatal\x1b[0m: An Error occured while extracting the package: "; 
     int flags = ARCHIVE_EXTRACT_TIME;
     flags |= ARCHIVE_EXTRACT_PERM;
     flags |= ARCHIVE_EXTRACT_ACL;
@@ -147,7 +147,7 @@ static int extract(const char *filename) {
         }
         r = archive_write_header(ext, entry);
         if (r != ARCHIVE_OK) {
-            fprintf(stderr, "Warning: failed to write %s: %s\n", archive_entry_pathname(entry), archive_error_string(ext));
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: failed to write %s: %s\n", archive_entry_pathname(entry), archive_error_string(ext));
         }
         else {
             r = copy_data(a, ext);
@@ -271,9 +271,9 @@ char *byte_units(uint64_t byte_size) {
 }
 
 cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, uint8_t *status) {
-    const char *err_msg_prefix = "An error occurred while getting information on the package/s: "; 
+    const char *err_msg_prefix = "\x1b[1;31mFatal\x1b[0m: Failed to get information on the package/s: "; 
     if (!pkg_len) {
-        fprintf(stderr, "Warning: No packages were given to look for.\n");
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: No packages were given to look for.\n");
         *status = 20;
         return cJSON_CreateNull();
     }
@@ -342,9 +342,13 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
         if (header_error) {
             fprintf(
                 stderr, 
-                "Warning: Failed to get content type: cURL Error %d\n", 
-                header_error
+                "%sFailed to get content type: cURL Error %d\n", 
+                err_msg_prefix, header_error
             );
+            curl_easy_cleanup(curl);
+            free(chunk.response);
+            *status = 4;
+            return cJSON_CreateNull();
         }
         char type_match[] = "application/json";
         for (uint8_t type_idx = 0; type_idx < sizeof(type_match); type_idx++) {
@@ -476,7 +480,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
 }
 
 char *download_pkg(char *url_path, uint8_t *status) {
-    const char *err_msg_prefix = "An error occurred while downloading the package: "; 
+    const char *err_msg_prefix = "\x1b[1;31mFatal\x1b[0m: Failed to download the package: "; 
     uid_t uid = getuid();
     struct passwd* pwd = getpwuid(uid);
 
@@ -724,7 +728,7 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc) {
             }
         }
         if (!((url_path && cJSON_IsString(url_path)) || base_url)) {
-            fprintf(stderr, "Error: Failed to extract url from package info\n");
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to extract url from package info\n");
             break;
         }
         uint8_t download_status;
@@ -744,14 +748,14 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc) {
             return download_status;
         }
         if (!*download_path) {
-            fprintf(stderr, "Fatal: API metadata went missing.\n");
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
             return 12;
         }
         uid_t uid = getuid();
         struct passwd* pwd = getpwuid(uid);
 
         if (!pwd) {
-            fprintf(stderr, "Fatal: Could not get home directory\n");
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory\n");
             return 10;
         }
         uint32_t hdirc;
@@ -907,12 +911,12 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         return status;
     }
     if (cJSON_IsNull(response_body)) {
-        fprintf(stderr, "Fatal: API metadata went missing.\n");
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
         return 9;
     }
     cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     if (!found_packages) {
-        fprintf(stderr, "Fatal: API results went missing.\n");
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API results went missing.\n");
         cJSON_Delete(response_body);
         return 9;
     }
@@ -1073,7 +1077,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             }
         }
         if (!((url_path && cJSON_IsString(url_path)) || base_url)) {
-            fprintf(stderr, "Error: Failed to extract url from package info\n");
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to extract url from package info\n");
             break;
         }
         uint8_t download_status;
@@ -1094,7 +1098,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             return download_status;
         }
         if (!*download_path) {
-            fprintf(stderr, "Fatal: API metadata went missing.\n");
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
             free(found_pkg_names);
             cJSON_Delete(response_body);
             return 12;
@@ -1103,7 +1107,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         struct passwd* pwd = getpwuid(uid);
 
         if (!pwd) {
-            fprintf(stderr, "Fatal: Could not get home directory");
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory");
             return 10;
         }
         uint32_t hdirc;
@@ -1125,7 +1129,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         printf("Build files for \033[1m%s\033[0m are:\n     ", pkg_base->valuestring);
         DIR *dir = opendir(pkg_base->valuestring);
         if (!dir) { 
-            fprintf(stderr, "Error: could not list directory\n"); 
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list directory\n"); 
             return 13;
         }
         struct dirent *dir_item;
@@ -1146,32 +1150,32 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         chdir(pkg_base->valuestring);
         pid_t pid = fork();
         if (pid < 0) {
-            fprintf(stderr, "Error forking process: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to fork process: %s\n", strerror(errno));
         }
         if (pid == 0) {
             char *argv[] = {
                 "less", "PKGBUILD", NULL
             };
             execvp("less", argv);
-            fprintf(stderr, "Warning: less command failed: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed: %s\n", strerror(errno));
             _exit(127);
         }
         int32_t less_status;
         if (waitpid(pid, &less_status, 0) < 0) {
-            fprintf(stderr, "Error waiting for less command: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed waiting for less command: %s\n", strerror(errno));
         }
         int less_failed = WEXITSTATUS(less_status);
         if (WIFSIGNALED(less_status)) {
             if (WTERMSIG(less_status) == 2) {
-                fprintf(stderr, "Warning: less command stopped by user\n");
+                fprintf(stderr, "\x1b[1;33mWarning\x1b[0m: less command stopped by user\n");
             } else {
                 fprintf(
-                    stderr, "Warning: less command exited due to signal %d: %s\n", 
+                    stderr, "\x1b[1;33mWarning\x1b[0m: less command exited due to signal %d: %s\n", 
                     WTERMSIG(less_status), strsignal(WTERMSIG(less_status)));
             }
         }
         if (less_failed) {
-            fprintf(stderr, "Warning: less command failed with exit code %d\n", less_failed);
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed with exit code %d\n", less_failed);
         }
     }
     free(found_pkg_names);
@@ -1228,19 +1232,19 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             return status;
         }
         if (cJSON_IsNull(response_body)) {
-            fprintf(stderr, "Fatal: API metadata went missing.\n");
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
             return 9;
         }
         found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     }
     if (!found_packages) {
-        fprintf(stderr, "Fatal: API results went missing.\n");
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API results went missing.\n");
         cJSON_Delete(response_body);
         return 9;
     }
     if (!cJSON_GetArraySize(found_packages)) {
         cJSON_Delete(response_body);
-        fprintf(stderr, "No packages install, exiting...\n");
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: No packages to install, exiting...\n");
         return 2;
     }
     cJSON *package = NULL;
@@ -1335,7 +1339,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             DIR *dir = opendir(pkg_base->valuestring);
             if (!dir) { 
                 printf("\n");
-                fprintf(stderr, "Error: could not list directory\n"); 
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list directory\n"); 
                 free(viewed_bases);
                 free(found_pkg_names);
                 cJSON_Delete(response_body);
@@ -1360,32 +1364,32 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             chdir(pkg_base->valuestring);
             pid_t pid = fork();
             if (pid < 0) {
-                fprintf(stderr, "Error forking process: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to fork process: %s\n", strerror(errno));
             }
             if (pid == 0) {
                 char *argv[] = {
                     "less", "PKGBUILD", NULL
                 };
                 execvp("less", argv);
-                fprintf(stderr, "Warning: less command failed: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed: %s\n", strerror(errno));
                 _exit(127);
             }
             int32_t less_status;
             if (waitpid(pid, &less_status, 0) < 0) {
-                fprintf(stderr, "Error waiting for less command: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed waiting for less command: %s\n", strerror(errno));
             }
             int less_failed = WEXITSTATUS(less_status);
             if (WIFSIGNALED(less_status)) {
                 if (WTERMSIG(less_status) == 2) {
-                    fprintf(stderr, "Warning: less command stopped by user\n");
+                    fprintf(stderr, "\x1b[1;33mWarning\x1b[0m: less command stopped by user\n");
                 } else {
                     fprintf(
-                        stderr, "Warning: less command exited due to signal %d: %s\n", 
+                        stderr, "\x1b[1;33mWarning\x1b[0m: less command exited due to signal %d: %s\n", 
                         WTERMSIG(less_status), strsignal(WTERMSIG(less_status)));
                 }
             }
             if (less_failed) {
-                fprintf(stderr, "Warning: less command failed with exit code %d\n", less_failed);
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed with exit code %d\n", less_failed);
             }
             chdir("..");
         }
@@ -1444,7 +1448,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
 
                 makepkg_cmd = popen("makepkg --printsrcinfo > .SRCINFO", "r");
                 if (makepkg_cmd == NULL) {
-                    fprintf(stderr, "Error: popen error\n");
+                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: popen error\n");
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
@@ -1454,7 +1458,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 srcinfo_status_info = pclose(makepkg_cmd);
                 int srcinfo_status = WEXITSTATUS(srcinfo_status_info);
                 if (srcinfo_status_info == -1) {
-                    fprintf(stderr, "Error: popen error -1\n");
+                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: popen error -1\n");
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
@@ -1463,7 +1467,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 }
                 if (WIFSIGNALED(srcinfo_status_info)) {
                     fprintf(
-                        stderr, "makepkg exited due to signal %d: %s\n", 
+                        stderr, "\x1b[1;33mStopping\x1b[0m: makepkg exited due to signal %d: %s\n", 
                         WTERMSIG(srcinfo_status_info), strsignal(WTERMSIG(srcinfo_status_info)));
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
@@ -1471,7 +1475,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     return 128+WTERMSIG(srcinfo_status_info);
                 }
                 if (srcinfo_status) {
-                    fprintf(stderr, "Error: makepkg error %d\n", srcinfo_status);
+                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", srcinfo_status);
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
@@ -1485,7 +1489,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
 
             srcinfo_file = fopen(".SRCINFO", "r");
             if (srcinfo_file == NULL) {
-                fprintf(stderr, "Error: error opening .SRCINFO\n");
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: error opening .SRCINFO\n");
                 free(found_pkg_names);
                 cJSON_Delete(response_body);
                 free(fetched_bases);
@@ -1495,7 +1499,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
 
             srcinfo_closed = fclose(srcinfo_file);
             if (srcinfo_closed == -1) {
-                fprintf(stderr, "Warning: error closing .SRCINFO file\n");
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't close .SRCINFO file\n");
             }
 
             char *dep_content = malloc(srcinfo_size);
@@ -1656,7 +1660,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             return status;
         }
         if (cJSON_IsNull(depends_response_body)) {
-            fprintf(stderr, "Fatal: API metadata went missing.\n");
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                     free(base_dependencies[idx]);
@@ -1669,7 +1673,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         cJSON *found_dependencies = cJSON_GetObjectItemCaseSensitive(depends_response_body, "results");
         if (!found_dependencies) {
-            fprintf(stderr, "Fatal: API results went missing.\n");
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API results went missing.\n");
             cJSON_Delete(depends_response_body);
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
@@ -1758,7 +1762,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             chdir(pkg_base->valuestring);
             pid_t pid = fork();
             if (pid < 0) {
-                fprintf(stderr, "Error forking process: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
                 if (base_dependencies != NULL) {
                     for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                         free(base_dependencies[idx]);
@@ -1777,12 +1781,12 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     "makepkg", "-sf", NULL
                 };
                 execvp("makepkg", argv);
-                fprintf(stderr, "Makepkg command failed to run: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
                 _exit(127);
             }
             int32_t makepkg_status_info;
             if (waitpid(pid, &makepkg_status_info, 0) < 0) {
-                fprintf(stderr, "Error waiting for makepkg command: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for makepkg command: %s\n", strerror(errno));
                 if (base_dependencies != NULL) {
                     for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                         free(base_dependencies[idx]);
@@ -1801,14 +1805,14 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 int return_code = 0;
                 if (WIFSIGNALED(makepkg_status_info)) {
                     if (WTERMSIG(makepkg_status_info) == 2) {
-                        fprintf(stderr, "Makepkg process stopped by user\n");
+                        fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process stopped by user\n");
                     } else {
-                        fprintf(stderr, "Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
+                        fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
                     }
                     return_code = 128 + WTERMSIG(makepkg_status_info);
                 }
                 if (makepkg_status) {
-                    fprintf(stderr, "Error: makepkg error %d\n", makepkg_status);
+                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", makepkg_status);
                     return_code = 31+ makepkg_status;
                 }
                 if (base_dependencies != NULL) {
@@ -1827,7 +1831,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             DIR *dir = opendir("./");
             if (!dir) { 
                 printf("\n");
-                fprintf(stderr, "Error: could not list directory\n"); 
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not list directory\n"); 
                 for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
                     free(dep_install_args[idx]);
                 }
@@ -1868,7 +1872,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     }
                     if (!no_match) {
                         if (dep_install_args_len >= arg_max) {
-                            fprintf(stderr, "Error: Too many packages to list (%d max).\n", PATH_MAX);
+                            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Too many packages to list (%d max).\n", PATH_MAX);
                             closedir(dir);
                             if (base_dependencies != NULL) {
                                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
@@ -1908,7 +1912,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             printf("Installing \x1b[1m%d\x1b[0m dependencies...\n", dependency_install_count);
             pid_t pid = fork();
             if (pid < 0) {
-                fprintf(stderr, "Error forking process: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
                 if (base_dependencies != NULL) {
                     for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                         free(base_dependencies[idx]);
@@ -1928,7 +1932,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             }
             if (pid == 0) {
                 execvp("sudo", dep_install_args);
-                fprintf(stderr, "Pacman failed to run: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Pacman failed to run: %s\n", strerror(errno));
                 _exit(127);
             }
             for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
@@ -1937,7 +1941,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             free(dep_install_args);
             int32_t dep_install_info;
             if (waitpid(pid, &dep_install_info, 0) < 0) {
-                fprintf(stderr, "Waiting for install process failed: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Waiting for install process failed: %s\n", strerror(errno));
                 if (base_dependencies != NULL) {
                     for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                         free(base_dependencies[idx]);
@@ -1955,15 +1959,15 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             if (dep_install_status || WIFSIGNALED(dep_install_info)) {
                 int return_code = 0;
                 if (WIFSIGNALED(dep_install_info)) {
-                    if (WTERMSIG(dep_install_info) == 2) {
-                        fprintf(stderr, "Install process stopped by user\n");
+                    if (WTERMSIG(dep_install_info) == SIGINT) {
+                        fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process stopped by user\n");
                     } else {
-                        fprintf(stderr, "Install process exited due to signal %d: %s\n", WTERMSIG(dep_install_info), strsignal(WTERMSIG(dep_install_info)));
+                        fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process exited due to signal %d: %s\n", WTERMSIG(dep_install_info), strsignal(WTERMSIG(dep_install_info)));
                     }
                     return_code = 128 + WTERMSIG(dep_install_info);
                 }
                 if (dep_install_status) {
-                    fprintf(stderr, "Error: pacman error %d\n", dep_install_status);
+                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: pacman error %d\n", dep_install_status);
                     return_code = 64;
                 }
                 if (base_dependencies != NULL) {
@@ -2026,7 +2030,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         chdir(pkg_base->valuestring);
         pid_t pid = fork();
         if (pid < 0) {
-            fprintf(stderr, "Error forking process: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                     free(base_dependencies[idx]);
@@ -2047,12 +2051,12 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 "makepkg", "-sf", NULL
             };
             execvp("makepkg", argv);
-            fprintf(stderr, "Makepkg command failed to run: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
             _exit(127);
         }
         int32_t makepkg_status_info;
         if (waitpid(pid, &makepkg_status_info, 0) < 0) {
-            fprintf(stderr, "Error waiting for makepkg command: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for makepkg command: %s\n", strerror(errno));
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                     free(base_dependencies[idx]);
@@ -2073,14 +2077,14 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             int return_code = 0;
             if (WIFSIGNALED(makepkg_status_info)) {
                 if (WTERMSIG(makepkg_status_info) == 2) {
-                    fprintf(stderr, "Makepkg process stopped by user\n");
+                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process stopped by user\n");
                 } else {
-                    fprintf(stderr, "Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
+                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
                 }
                 return_code = 128 + WTERMSIG(makepkg_status_info);
             }
             if (makepkg_status) {
-                fprintf(stderr, "Error: makepkg error %d\n", makepkg_status);
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", makepkg_status);
                 return_code = 31+ makepkg_status;
             }
             if (base_dependencies != NULL) {
@@ -2101,7 +2105,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         DIR *dir = opendir("./");
         if (!dir) { 
             printf("\n");
-            fprintf(stderr, "Error: could not list directory\n"); 
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list directory\n"); 
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                     free(base_dependencies[idx]);
@@ -2140,7 +2144,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 }
                 if (!no_match) {
                     if (install_args_len >= arg_max) {
-                        fprintf(stderr, "Error: Too many packages to list (%d max).\n", arg_max);
+                        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Too many packages to list (%d max).\n", arg_max);
                         closedir(dir);
                         if (base_dependencies != NULL) {
                             for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
@@ -2178,7 +2182,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         printf("Installing \x1b[1m%d\x1b[0m packages...\n", install_count);
         pid_t pid = fork();
         if (pid < 0) {
-            fprintf(stderr, "Error forking process: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                     free(base_dependencies[idx]);
@@ -2196,7 +2200,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         if (pid == 0) {
             execvp("sudo", install_args);
-            fprintf(stderr, "Pacman failed to run: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Pacman failed to run: %s\n", strerror(errno));
             _exit(127);
         }
         for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
@@ -2205,7 +2209,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         free(install_args);
         int32_t install_info;
         if (waitpid(pid, &install_info, 0) < 0) {
-            fprintf(stderr, "Waiting for install process failed: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Waiting for install process failed: %s\n", strerror(errno));
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
                     free(base_dependencies[idx]);
@@ -2222,14 +2226,14 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             int return_code = 0;
             if (WIFSIGNALED(install_info)) {
                 if (WTERMSIG(install_info) == 2) {
-                    fprintf(stderr, "Install process stopped by user\n");
+                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process stopped by user\n");
                 } else {
-                    fprintf(stderr, "Install process exited due to signal %d: %s\n", WTERMSIG(install_info), strsignal(WTERMSIG(install_info)));
+                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process exited due to signal %d: %s\n", WTERMSIG(install_info), strsignal(WTERMSIG(install_info)));
                 }
                 return_code = 128 + WTERMSIG(install_info);
             }
             if (install_status) {
-                fprintf(stderr, "Error: pacman error %d\n", install_status);
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: pacman error %d\n", install_status);
                 return_code = 64;
             }
             if (base_dependencies != NULL) {
@@ -2283,7 +2287,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     alpm_errno_t err;
     alpm_handle_t * handle = alpm_initialize("/", DB_PATH, &err);
     if (handle == NULL) {
-        fprintf(stderr, "ALPM Error %d: %s\n", err, alpm_strerror(err));
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: ALPM Error %d: %s\n", err, alpm_strerror(err));
         return 18;
     }
     alpm_db_t * local_db = alpm_get_localdb(handle);
@@ -2294,7 +2298,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     DIR *sync_dir = opendir(sync_dir_path);
     free(sync_dir_path);
     if (sync_dir == NULL) {
-        fprintf(stderr, "Error: could not list db sync directory\n"); 
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list db sync directory\n"); 
         alpm_release(handle);
         return 13;
     }
@@ -2318,7 +2322,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     closedir(sync_dir);
     alpm_list_t *sync_dbs = alpm_get_syncdbs(handle);
     if (sync_dbs == NULL) {
-        fprintf(stderr, "Error: Can't check for AUR packages due to missing or empty pacman database\n");
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Can't check for AUR packages due to missing or empty pacman database\n");
         alpm_release(handle);
         return 19;
     }
@@ -2440,7 +2444,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         return status;
     }
     if (cJSON_IsNull(response_body)) {
-        fprintf(stderr, "Fatal: API metadata went missing.\n");
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
         for (uint32_t idx = 0; idx < install_count; idx++) {
             free(installed_names[idx]);
             free(installed_versions[idx]);
@@ -2452,7 +2456,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     if (!found_packages) {
         cJSON_Delete(response_body);
-        fprintf(stderr, "Fatal: API results went missing.\n");
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API results went missing.\n");
         for (uint32_t idx = 0; idx < install_count; idx++) {
             free(installed_names[idx]);
             free(installed_versions[idx]);
@@ -2463,7 +2467,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     }
     if (!cJSON_GetArraySize(found_packages)) {
         cJSON_Delete(response_body);
-        fprintf(stderr, "No packages install, exiting...\n");
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: No packages to install, exiting...\n");
         for (uint32_t idx = 0; idx < install_count; idx++) {
             free(installed_names[idx]);
             free(installed_versions[idx]);
@@ -2560,7 +2564,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             printf("Attempting to upgrade archlinux-keyring first to prevent signature errors...\n");
             pid_t pid = fork();
             if (pid < 0) {
-                fprintf(stderr, "Error forking process: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
                 cJSON_Delete(response_body);
                 for (uint32_t idx = 0; idx < install_count; idx++) {
                     free(installed_names[idx]);
@@ -2577,12 +2581,12 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                     "sudo", "pacman", "-Sy", "archlinux-keyring", NULL
                 };
                 execvp("sudo", argv);
-                fprintf(stderr, "Pacman failed to run: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Pacman failed to run: %s\n", strerror(errno));
                 _exit(127);
             }
             int32_t keyring_status;
             if (waitpid(pid, &keyring_status, 0) < 0) {
-                fprintf(stderr, "Error waiting for pacman: %s\n", strerror(errno));
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for pacman: %s\n", strerror(errno));
                 cJSON_Delete(response_body);
                 for (uint32_t idx = 0; idx < install_count; idx++) {
                     free(installed_names[idx]);
@@ -2597,10 +2601,10 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             int keyring_failed = WEXITSTATUS(keyring_status);
             if (WIFSIGNALED(keyring_status)) {
                 if (WTERMSIG(keyring_status) == 2) {
-                    fprintf(stderr, "Pacman stopped by user\n");
+                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Pacman stopped by user\n");
                 } else {
                     fprintf(
-                        stderr, "Pacman exited due to signal %d: %s\n", 
+                        stderr, "\x1b[1;33mStopping\x1b[0m: Pacman exited due to signal %d: %s\n", 
                         WTERMSIG(keyring_status), strsignal(WTERMSIG(keyring_status)));
                 }
                 cJSON_Delete(response_body);
@@ -2616,10 +2620,9 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 return 128+WTERMSIG(keyring_status);
             }
             if (keyring_failed) {
-                fprintf(stderr, "Error: Pacman failed with exit code %d\n", keyring_failed);
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Pacman failed with exit code %d\n", keyring_failed);
                 cJSON_Delete(response_body);
                 for (uint32_t idx = 0; idx < install_count; idx++) {
-                    // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
                     free(installed_names[idx]);
                     free(installed_versions[idx]);
                 }
@@ -2638,7 +2641,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
         pid_t pid = fork();
         if (pid < 0) {
-            fprintf(stderr, "Error forking process: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
             cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             for (uint32_t idx = 0; idx < install_count; idx++) {
@@ -2655,12 +2658,12 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 "sudo", "pacman", "-Syu", NULL
             };
             execvp("sudo", argv);
-            fprintf(stderr, "pacman failed to run: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: pacman failed to run: %s\n", strerror(errno));
             _exit(127);
         }
         int32_t pacman_status;
         if (waitpid(pid, &pacman_status, 0) < 0) {
-            fprintf(stderr, "Error waiting for pacman: %s\n", strerror(errno));
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for pacman: %s\n", strerror(errno));
             cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             for (uint32_t idx = 0; idx < install_count; idx++) {
@@ -2675,10 +2678,10 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         int pacman_failed = WEXITSTATUS(pacman_status);
         if (WIFSIGNALED(pacman_status)) {
             if (WTERMSIG(pacman_status) == 2) {
-                fprintf(stderr, "Pacman stopped by user\n");
+                fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Pacman stopped by user\n");
             } else {
                 fprintf(
-                    stderr, "Pacman exited due to signal %d: %s\n", 
+                    stderr, "\x1b[1;33mStopping\x1b[0m: Pacman exited due to signal %d: %s\n", 
                     WTERMSIG(pacman_status), strsignal(WTERMSIG(pacman_status)));
             }cJSON_Delete(response_body);
             for (uint32_t idx = 0; idx < install_count; idx++) {
@@ -2693,7 +2696,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             return 128+WTERMSIG(pacman_status);
         }
         if (pacman_failed) {
-            fprintf(stderr, "Error: Pacman failed with exit code %d\n", pacman_failed);
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Pacman failed with exit code %d\n", pacman_failed);
             cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             for (uint32_t idx = 0; idx < install_count; idx++) {
