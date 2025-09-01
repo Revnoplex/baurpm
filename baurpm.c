@@ -1166,7 +1166,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
         int less_failed = WEXITSTATUS(less_status);
         if (WIFSIGNALED(less_status)) {
-            if (WTERMSIG(less_status) == 2) {
+            if (WTERMSIG(less_status) == SIGINT) {
                 fprintf(stderr, "\x1b[1;33mWarning\x1b[0m: less command stopped by user\n");
             } else {
                 fprintf(
@@ -1380,7 +1380,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             }
             int less_failed = WEXITSTATUS(less_status);
             if (WIFSIGNALED(less_status)) {
-                if (WTERMSIG(less_status) == 2) {
+                if (WTERMSIG(less_status) == SIGINT) {
                     fprintf(stderr, "\x1b[1;33mWarning\x1b[0m: less command stopped by user\n");
                 } else {
                     fprintf(
@@ -1804,7 +1804,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             if (makepkg_status || WIFSIGNALED(makepkg_status_info)) {
                 int return_code = 0;
                 if (WIFSIGNALED(makepkg_status_info)) {
-                    if (WTERMSIG(makepkg_status_info) == 2) {
+                    if (WTERMSIG(makepkg_status_info) == SIGINT) {
                         fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process stopped by user\n");
                     } else {
                         fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
@@ -2076,7 +2076,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         if (makepkg_status || WIFSIGNALED(makepkg_status_info)) {
             int return_code = 0;
             if (WIFSIGNALED(makepkg_status_info)) {
-                if (WTERMSIG(makepkg_status_info) == 2) {
+                if (WTERMSIG(makepkg_status_info) == SIGINT) {
                     fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process stopped by user\n");
                 } else {
                     fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
@@ -2225,7 +2225,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         if (install_status || WIFSIGNALED(install_info)) {
             int return_code = 0;
             if (WIFSIGNALED(install_info)) {
-                if (WTERMSIG(install_info) == 2) {
+                if (WTERMSIG(install_info) == SIGINT) {
                     fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process stopped by user\n");
                 } else {
                     fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process exited due to signal %d: %s\n", WTERMSIG(install_info), strsignal(WTERMSIG(install_info)));
@@ -2600,7 +2600,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             }
             int keyring_failed = WEXITSTATUS(keyring_status);
             if (WIFSIGNALED(keyring_status)) {
-                if (WTERMSIG(keyring_status) == 2) {
+                if (WTERMSIG(keyring_status) == SIGINT) {
                     fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Pacman stopped by user\n");
                 } else {
                     fprintf(
@@ -2677,7 +2677,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
         int pacman_failed = WEXITSTATUS(pacman_status);
         if (WIFSIGNALED(pacman_status)) {
-            if (WTERMSIG(pacman_status) == 2) {
+            if (WTERMSIG(pacman_status) == SIGINT) {
                 fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Pacman stopped by user\n");
             } else {
                 fprintf(
