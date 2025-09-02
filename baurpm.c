@@ -16,6 +16,7 @@
 #include <alpm.h>
 #include <alpm_list.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 #define LONG_NAME "Basic Arch User Repository (AUR) Package Manager"
 #define SHORT_NAME "baurpm"
@@ -744,11 +745,13 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc) {
         if (download_status) {
             if (*download_path) {
                 free(download_path);
+                free(downloaded_bases);
             }
             return download_status;
         }
         if (!*download_path) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
+            free(downloaded_bases);
             return 12;
         }
         uid_t uid = getuid();
@@ -756,6 +759,8 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc) {
 
         if (!pwd) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory\n");
+            free(download_path);
+            free(downloaded_bases);
             return 10;
         }
         uint32_t hdirc;
@@ -771,6 +776,7 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc) {
         int extraction_failed = extract(download_path);
         if (extraction_failed) {
             free(download_path);
+            free(downloaded_bases);
             return extraction_failed;
         }
         free(download_path);
@@ -1443,22 +1449,50 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             int stat_status = stat(".SRCINFO", &stat_info);
             if (stat_status) {
                 printf("Generating information on dependencies for package base \x1b[1m%s\x1b[0m...\n", pkg_base->valuestring);
-                FILE *makepkg_cmd;
-                int srcinfo_status_info;
-
-                makepkg_cmd = popen("makepkg --printsrcinfo > .SRCINFO", "r");
-                if (makepkg_cmd == NULL) {
-                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: popen error\n");
+                pid_t pid = fork();
+                if (pid < 0) {
+                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
                     return 14;
                 }
+                if (pid == 0) {
+                    int fd = open(".SRCINFO", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                    if (fd == -1) {
+                        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to generate .SRCINFO: %s\n", strerror(errno));
+                        _exit(127);
+                    }
+                    dup2(fd, STDOUT_FILENO);
+                    dup2(fd, STDERR_FILENO);
+                    close(fd);
+                    char *argv[] = {
+                        "makepkg", "--printsrcinfo", NULL
+                    };
+                    execvp("makepkg", argv);
+                    fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
+                    _exit(127);
+                }
+                int32_t srcinfo_status_info;
+                if (waitpid(pid, &srcinfo_status_info, 0) < 0) {
+                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for makepkg command: %s\n", strerror(errno));
+                    free(found_pkg_names);
+                    cJSON_Delete(response_body);
+                    free(fetched_bases);
+                    return 14;
+                }
+                // FILE *makepkg_cmd;
 
-                srcinfo_status_info = pclose(makepkg_cmd);
+                // makepkg_cmd = popen("makepkg --printsrcinfo > .SRCINFO", "r");
+                // if (makepkg_cmd == NULL) {
+                //     fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: popen error\n");
+                //     return 14;
+                // }
+
+                // srcinfo_status_info = pclose(makepkg_cmd);
                 int srcinfo_status = WEXITSTATUS(srcinfo_status_info);
                 if (srcinfo_status_info == -1) {
-                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: popen error -1\n");
+                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: waitpid error -1\n");
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
