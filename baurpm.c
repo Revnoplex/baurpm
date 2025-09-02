@@ -1215,8 +1215,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         printf("Using pre-fetched package data...\n");
         found_packages = package_data;
     } else {
-        cJSON_Delete(package_data);
-    
         printf("Searching for \x1b[1m");
         print_string_array(arguments, arg_len);
         printf("\x1b[0m\n");
@@ -1267,6 +1265,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     char *input_successful = NULL;
     char prompt[6];
     if (cJSON_IsNull(package_data)) {
+        cJSON_Delete(package_data);
         if (pkgsc == 1) {
             printf("A package called \033[1m%s\033[0m was found.\nMake and install the package? [Y/n]: ", found_pkg_names[0]);
         } else {
