@@ -5,7 +5,7 @@
 # BAURPM
 Basic Arch User Repository (AUR) Package Manager
 
-A basic AUR helper written in python that I wrote for personal use on my Archlinux system.
+A basic AUR helper written in python (rewriting in c) that I wrote for personal use on my Archlinux system.
 
 ## Disclaimer
 This is a small personal project that is still a work in progress so not everything is implemented.
