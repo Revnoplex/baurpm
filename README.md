@@ -33,22 +33,36 @@ make sure all dependencies are installed
 sudo pacman -S --needed - < pkglist.txt
 ```
 
-Running make by itself should generate `build/baurpm`
+Then run these commands to compile the program.
 ```sh
+autoreconf --install
+./configure
 make
 ```
+This should generate `baurpm`
 
 You can build debug binaries with
 ```sh
-make -B baurpm_debug
+make -B baurpm_debug -f Makefile.2
 ```
 This creates `build/baurpm-debug`
 
-You can install with
+You can install to PATH with
 ```sh
 sudo make install
 ```
 
+### Old Method
+
+Running make by itself should generate `build/baurpm`
+```sh
+make -f Makefile.2
+```
+
+You can install with
+```sh
+sudo make install -f Makefile.2
+```
 
 ## Usage
 Usage Layout is
@@ -63,5 +77,7 @@ To upgrade installed aur packages
 ```sh
 ./baurpm.py -C
 ```
+
+Use `./baurpm` to use the c version
 
 See `./baurpm.py -H` for more commands and usage
