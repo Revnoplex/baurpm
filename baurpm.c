@@ -1,3 +1,5 @@
+// Needs to be 700 instead of 500 in order for both nftw and strsignal to work
+#define _XOPEN_SOURCE 700
 #include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -17,6 +19,7 @@
 #include <alpm_list.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <ftw.h>
 
 #define LONG_NAME "Basic Arch User Repository (AUR) Package Manager"
 #define SHORT_NAME "baurpm"
@@ -38,6 +41,17 @@ struct memory {
     size_t size;
   };
    
+
+int rmrf(const char *path, const struct stat *stat_info, int typeflag, struct FTW *ftwbuf) {
+    (void)(stat_info);
+    (void)(typeflag);
+    (void)(ftwbuf);
+    int rm_status;
+    if ((rm_status = remove(path))) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to remove %s: %s\n", path, strerror(errno));
+    }
+    return rm_status;
+}
 
 static size_t cb(char *data, size_t size, size_t nmemb, void *clientp) {
     /* 
@@ -100,7 +114,7 @@ static int copy_data(struct archive *ar, struct archive *aw) {
 	}
 }
 
-static int extract(const char *filename) {
+static int extract(const char *filename, int32_t keep_existing) {
     /*
     Source: https://github.com/libarchive/libarchive/blob/master/examples/untar.c
     Copyright: https://github.com/libarchive/libarchive/blob/master/COPYING
@@ -145,6 +159,18 @@ static int extract(const char *filename) {
             archive_write_close(ext);
             archive_write_free(ext);
             return r;
+        }
+        const char *entry_pathname = archive_entry_pathname(entry);
+        if (entry_pathname != NULL && !keep_existing) {
+            struct stat stat_info;
+            int stat_status = stat(entry_pathname, &stat_info);
+            if (stat_status == 0 && S_ISDIR(stat_info.st_mode)) {
+                printf("Directory %s exists. Deleting to prevent issues with PKGBUILD scripts...\n", entry_pathname);
+                int rmrf_successful = nftw(entry_pathname, rmrf, 64, FTW_DEPTH | FTW_PHYS);
+                if(rmrf_successful) {
+                    fprintf(stderr, "\x1b[1;31mError\x1b[0m: Removing directory %s failed: %s\n", entry_pathname, strerror(errno));
+                }
+            }
         }
         r = archive_write_header(ext, entry);
         if (r != ARCHIVE_OK) {
@@ -656,7 +682,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
 
 }
 
-uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc) {
+uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
     char **downloaded_bases = malloc(pkgc * sizeof(void *));
     uint32_t downloaded_bases_count = 0;
     const cJSON *package = NULL;
@@ -773,7 +799,7 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc) {
         chdir(cache_dir_buffer);
         free(cache_dir_buffer);
         // extract package
-        int extraction_failed = extract(download_path);
+        int extraction_failed = extract(download_path, keep_existing);
         if (extraction_failed) {
             free(download_path);
             free(downloaded_bases);
@@ -818,13 +844,19 @@ int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
         {
             { "" },
             { "" },
-            { "f: Ignore any missing packages", "n: Skip reading PKGBUILD files", "" }, 
-            { 
+            {
+                "f: Ignore any missing packages",
+                "n: Skip reading PKGBUILD files",
+                "d: Keep existing cache directories when extracting",
+                ""
+            },
+            {
                 "i, <packages>: Ignore upgrading packages specified", 
                 "f: Ignore any missing packages", 
                 "n: Skip reading PKGBUILD files",
                 "s: Skip running pacman -Syu",
                 "k: Upgrade archlinux-keyring first",
+                "d: Keep existing cache directories when extracting",
                 ""
             },
             { "" },
@@ -1124,7 +1156,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         snprintf(cache_dir_buffer, dirc, "%s/%s", pwd->pw_dir, cache_dir);
         chdir(cache_dir_buffer);
         free(cache_dir_buffer);
-        int extraction_failed = extract(download_path);
+        int extraction_failed = extract(download_path, 0);
         if (extraction_failed) {
             free(download_path);
             free(found_pkg_names);
@@ -1192,6 +1224,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
 int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_data) {
     uint8_t skip_missing = 0;
     uint8_t skip_review = 0;
+    int32_t keep_existing = 0;
     for (uint32_t idx = 0; options[idx] != '\0'; idx++) {
         switch (options[idx]) {
             case 'f':
@@ -1199,6 +1232,9 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 break;
             case 'n':
                 skip_review = 1;
+                break;
+            case 'd':
+                keep_existing = 1;
         }
     }
     if (!arg_len) {
@@ -1282,7 +1318,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
     }
     printf("Downloading packages...\n");
-    uint32_t download_and_extraction_failed = download_and_extract_pkgs(found_packages, found_pkg_arrc);
+    uint32_t download_and_extraction_failed = download_and_extract_pkgs(found_packages, found_pkg_arrc, keep_existing);
     if (download_and_extraction_failed) {
         free(found_pkg_names);
         cJSON_Delete(response_body);
@@ -1745,7 +1781,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         if (required_dependencies_count > 0) {
             printf("Downloading dependencies...\n");
-            download_and_extraction_failed = download_and_extract_pkgs(required_dependencies, required_dependencies_count);
+            download_and_extraction_failed = download_and_extract_pkgs(required_dependencies, required_dependencies_count, keep_existing);
             if (download_and_extraction_failed) {
                 if (base_dependencies != NULL) {
                     for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
