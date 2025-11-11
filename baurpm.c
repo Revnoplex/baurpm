@@ -630,7 +630,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
         /* Perform the request, res gets the return code */
         res = curl_easy_perform(curl);
 
-        uint32_t download_size = ftell(download_ptr);
+        uint64_t download_size = ftell(download_ptr);
         /* once the request has been performed, 
         it would have finished writing to the file as it is a blocking call.
         So we can close it now */
@@ -640,7 +640,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
 
         /* Check for errors */
         if (res) {
-            fprintf(stderr, "\r%scURL Error %d: %s\n", err_msg_prefix, res, curl_easy_strerror(res));
+            fprintf(stderr, "\r\x1b[1;31mError\x1b[0m: cURL error %d: %s\n", res, curl_easy_strerror(res));
             *status = 4;
             free(file_name_buffer);
             curl_easy_cleanup(curl);
@@ -656,7 +656,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
 
         // Check for HTTP errors
         if (response_code >= 400) {
-            fprintf(stderr, "\r%sHTTP Error %ld\n", err_msg_prefix, response_code);
+            fprintf(stderr, "\r\x1b[1;31mError\x1b[0m: HTTP error %ld          \n", response_code);
             *status = 5;
             free(file_name_buffer);
             free(aur_netloc);
@@ -680,6 +680,24 @@ char *download_pkg(char *url_path, uint8_t *status) {
     *status = 3;
     return download_path;
 
+}
+
+char *retry_download_pkg(char *url_path, uint8_t *status) {
+    char *result;
+    int32_t retries = 0;
+    do {
+        if (retries >= 5) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Failed to download the package: Max retry attempts exceeded\n");
+            break;
+        }
+        if (retries > 0) {
+            printf("Retrying in 5 seconds...\n");
+            sleep(5);
+        }
+        result = download_pkg(url_path, status);
+        retries++;
+    } while (*status == 5 || *status == 4);
+    return result;
 }
 
 uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
@@ -764,7 +782,7 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_exis
             provider_url = base_url;
         }
         // download
-        char *download_path = download_pkg(provider_url, &download_status);
+        char *download_path = retry_download_pkg(provider_url, &download_status);
         if (base_url) {
             free(base_url);
         }
@@ -1123,7 +1141,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         if (base_url) {
             provider_url = base_url;
         }
-        char *download_path = download_pkg(provider_url, &download_status);
+        char *download_path = retry_download_pkg(provider_url, &download_status);
         if (base_url) {
             free(base_url);
         }
