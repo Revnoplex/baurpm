@@ -683,7 +683,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
 }
 
 char *retry_download_pkg(char *url_path, uint8_t *status) {
-    char *result;
+    char *result = NULL;
     int32_t retries = 0;
     do {
         if (retries >= 5) {
@@ -693,6 +693,9 @@ char *retry_download_pkg(char *url_path, uint8_t *status) {
         if (retries > 0) {
             printf("Retrying in 5 seconds...\n");
             sleep(5);
+        }
+        if (result != NULL) {
+            free(result);
         }
         result = download_pkg(url_path, status);
         retries++;
@@ -1255,11 +1258,42 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 keep_existing = 1;
         }
     }
-    if (!arg_len) {
+    int32_t to_ignore_len = 0;
+    char **to_ignore = malloc(sizeof(void *)*arg_len);
+    for (int32_t idx = 0; idx < arg_len; idx++) {
+        if (arguments[idx][0] == '-') {
+            to_ignore[to_ignore_len] = arguments[idx];
+            to_ignore_len++;
+        }
+    }
+    int32_t to_search_len = 0;
+    char **to_search = malloc(sizeof(void *)*arg_len);
+    for (int32_t idx = 0; idx < arg_len; idx++) {
+        if (arguments[idx][0] != '-') {
+            int32_t ignore_match = 0;
+            for (int32_t inner_idx = 0; inner_idx < to_ignore_len; inner_idx++) {
+                for (uint32_t str_idx = 0; arguments[idx][str_idx] == to_ignore[inner_idx][str_idx+1]; str_idx++) {
+                    if (to_ignore[inner_idx][str_idx+1] == '\0') {
+                        ignore_match = 1;
+                        break;
+                    }
+                }
+            }
+            if (ignore_match) {
+                printf("Skipping %s\n", arguments[idx]);
+            } else {
+                to_search[to_search_len] = arguments[idx];
+                to_search_len++;
+            }
+        }
+    }
+    if (!to_search_len) {
         fprintf(stderr, "No package names specified!\nFor usage, see %s -H for details\n", SHORT_NAME);
+        free(to_search);
         if (cJSON_IsNull(package_data)) {
             cJSON_Delete(package_data);
         }
+        free(to_ignore);
         return 1;
     }
     cJSON *response_body = NULL;
@@ -1267,10 +1301,11 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     uint8_t status;
     if (!cJSON_IsNull(package_data)) {
         printf("Using pre-fetched package data...\n");
+        free(to_search);
         found_packages = package_data;
     } else {
         printf("Searching for \x1b[1m");
-        print_string_array(arguments, arg_len);
+        print_string_array(to_search, to_search_len);
         printf("\x1b[0m\n");
         /*
         find_pkg Status Codes:
@@ -1284,12 +1319,14 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         8: cJSON parsing error
         9: JSON key error
         */
-        response_body = find_pkg(arguments, arg_len, skip_missing, &status);
+        response_body = find_pkg(to_search, to_search_len, skip_missing, &status);
+        free(to_search);
         if (status) {
             if (cJSON_IsNull(package_data)) {
                 cJSON_Delete(package_data);
             }
             cJSON_Delete(response_body);
+            free(to_ignore);
             return status;
         }
         if (cJSON_IsNull(response_body)) {
@@ -1297,6 +1334,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             if (cJSON_IsNull(package_data)) {
                 cJSON_Delete(package_data);
             }
+            free(to_ignore);
             return 9;
         }
         found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
@@ -1307,11 +1345,13 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         if (cJSON_IsNull(package_data)) {
             cJSON_Delete(package_data);
         }
+        free(to_ignore);
         return 9;
     }
     if (!cJSON_GetArraySize(found_packages)) {
         cJSON_Delete(response_body);
         fprintf(stderr, "\x1b[1;31mError\x1b[0m: No packages to install, exiting...\n");
+        free(to_ignore);
         return 2;
     }
     cJSON *package = NULL;
@@ -1341,6 +1381,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             printf("Installation aborted\n");
             free(found_pkg_names);
             cJSON_Delete(response_body);
+            free(to_ignore);
             return 0;
         }
     }
@@ -1349,6 +1390,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     if (download_and_extraction_failed) {
         free(found_pkg_names);
         cJSON_Delete(response_body);
+        free(to_ignore);
         return download_and_extraction_failed;
     }
     char **fetched_bases = malloc(found_pkg_arrc * sizeof(void *));
@@ -1411,6 +1453,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 free(viewed_bases);
                 free(found_pkg_names);
                 cJSON_Delete(response_body);
+                free(to_ignore);
                 return 13;
             }
             struct dirent *dir_item;
@@ -1469,6 +1512,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             free(found_pkg_names);
             free(fetched_bases);
             cJSON_Delete(response_body);
+            free(to_ignore);
             return 0;
         }
     }
@@ -1517,6 +1561,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
+                    free(to_ignore);
                     return 14;
                 }
                 if (pid == 0) {
@@ -1541,6 +1586,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
+                    free(to_ignore);
                     return 14;
                 }
                 // FILE *makepkg_cmd;
@@ -1558,6 +1604,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
+                    free(to_ignore);
                     return 15;
                     
                 }
@@ -1568,6 +1615,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
+                    free(to_ignore);
                     return 128+WTERMSIG(srcinfo_status_info);
                 }
                 if (srcinfo_status) {
@@ -1575,6 +1623,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     free(found_pkg_names);
                     cJSON_Delete(response_body);
                     free(fetched_bases);
+                    free(to_ignore);
                     return 31+srcinfo_status;
                 }
             }
@@ -1589,6 +1638,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 free(found_pkg_names);
                 cJSON_Delete(response_body);
                 free(fetched_bases);
+                free(to_ignore);
                 return 14;
             }
             size_t srcinfo_size = fread(srcinfo, sizeof(char), PATH_MAX, srcinfo_file);
@@ -1700,8 +1750,21 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                             dependency->valuestring[idx] = '\0';
                         }
                     }
-                    all_depends[actual_depends] = dependency->valuestring;
-                    actual_depends++;
+                    int32_t ignore_match = 0;
+                    for (int32_t idx = 0; idx < to_ignore_len; idx++) {
+                        for (uint32_t str_idx = 0; dependency->valuestring[str_idx] == to_ignore[idx][str_idx+1]; str_idx++) {
+                            if (to_ignore[idx][str_idx+1] == '\0') {
+                                ignore_match = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (ignore_match) {
+                        printf("Skipping %s\n", dependency->valuestring);
+                    } else {
+                        all_depends[actual_depends] = dependency->valuestring;
+                        actual_depends++;
+                    }
                 }
             }
         }
@@ -1725,12 +1788,26 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                             dependency->valuestring[idx] = '\0';
                         }
                     }
-                    all_depends[actual_depends] = dependency->valuestring;
-                    actual_depends++;
+                    int32_t ignore_match = 0;
+                    for (int32_t idx = 0; idx < to_ignore_len; idx++) {
+                        for (uint32_t str_idx = 0; dependency->valuestring[str_idx] == to_ignore[idx][str_idx+1]; str_idx++) {
+                            if (to_ignore[idx][str_idx+1] == '\0') {
+                                ignore_match = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (ignore_match) {
+                        printf("Skipping %s\n", dependency->valuestring);
+                    } else {
+                        all_depends[actual_depends] = dependency->valuestring;
+                        actual_depends++;
+                    }
                 }
             }
         }
     }
+    free(to_ignore);
     // for (uint32_t idx = 0; idx < actual_depends; idx++) {
     //     if (idx) {
     //         printf(", ");
@@ -1865,6 +1942,10 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     }
                     free(base_dependencies);
                 }
+                for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
+                    free(dep_install_args[idx]);
+                }
+                free(dep_install_args);
                 free(built_dep_bases);
                 free(found_pkg_names);
                 cJSON_Delete(required_dependencies);
@@ -1894,6 +1975,10 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 cJSON_Delete(required_dependencies);
                 cJSON_Delete(depends_response_body);
                 cJSON_Delete(response_body);
+                for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
+                    free(dep_install_args[idx]);
+                }
+                free(dep_install_args);
                 return 31+errno;
             }
             int makepkg_status = WEXITSTATUS(makepkg_status_info);
@@ -1917,6 +2002,10 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     }
                     free(base_dependencies);
                 }
+                for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
+                    free(dep_install_args[idx]);
+                }
+                free(dep_install_args);
                 free(built_dep_bases);
                 free(found_pkg_names);
                 cJSON_Delete(required_dependencies);
