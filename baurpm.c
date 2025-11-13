@@ -1286,11 +1286,17 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         */
         response_body = find_pkg(arguments, arg_len, skip_missing, &status);
         if (status) {
+            if (cJSON_IsNull(package_data)) {
+                cJSON_Delete(package_data);
+            }
             cJSON_Delete(response_body);
             return status;
         }
         if (cJSON_IsNull(response_body)) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
+            if (cJSON_IsNull(package_data)) {
+                cJSON_Delete(package_data);
+            }
             return 9;
         }
         found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
@@ -1298,6 +1304,9 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     if (!found_packages) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API results went missing.\n");
         cJSON_Delete(response_body);
+        if (cJSON_IsNull(package_data)) {
+            cJSON_Delete(package_data);
+        }
         return 9;
     }
     if (!cJSON_GetArraySize(found_packages)) {
@@ -2356,6 +2365,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     uint8_t skip_missing = 0;
     uint8_t skip_upgrade = 0;
     uint8_t upgrade_keyring = 0;
+    int32_t ignoring_packages = 0;
     for (uint32_t idx = 0; options[idx] != '\0'; idx++) {
         switch (options[idx]) {
             case 'f':
@@ -2366,6 +2376,9 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 break;
             case 's':
                 skip_upgrade = 1;
+                break;
+            case 'i':
+                ignoring_packages = 1;
         }
     }
     // todo: add proper options for this command.
@@ -2592,10 +2605,25 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 }
             }
             if (outdated) {
-                // Note: shares addresses from installed_names
-                needs_update[outdated_count] = installed_names[pkg_num];
-                cJSON_AddItemReferenceToArray(package_data, (cJSON *) package);
-                outdated_count++;
+                int32_t ignore_match = 0;
+                if (ignoring_packages) {
+                    for (int32_t idx = 0; idx < arg_len; idx++) {
+                        for (uint32_t str_idx = 0; installed_names[pkg_num][str_idx] == arguments[idx][str_idx]; str_idx++) {
+                            if (installed_names[pkg_num][str_idx] == '\0') {
+                                ignore_match = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (ignore_match) {
+                    printf("Skipping %s\n", installed_names[pkg_num]);
+                } else {
+                    // Note: shares addresses from installed_names
+                    needs_update[outdated_count] = installed_names[pkg_num];
+                    cJSON_AddItemReferenceToArray(package_data, (cJSON *) package);
+                    outdated_count++;
+                }
             }
         }
         pkg_num++;
