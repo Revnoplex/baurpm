@@ -1000,7 +1000,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     }
     cJSON_ArrayForEach(package, found_packages) {
         cJSON *pkg_name = cJSON_GetObjectItemCaseSensitive(package, "Name");
-        printf("View information for %s? [y/n]: ", pkg_name->valuestring);
+        printf("View information for %s? [y/N]: ", pkg_name->valuestring);
         char prompt[6];
         char *input_successful = fgets(prompt, sizeof(prompt), stdin);
         if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
@@ -1087,7 +1087,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 }
             }
         }
-        printf("Download and view build files and PKGBUILD? [y/n]: ");
+        printf("Download and view build files and PKGBUILD? [y/N]: ");
         input_successful = fgets(prompt, sizeof(prompt), stdin);
         if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
             continue;
@@ -1377,7 +1377,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             printf("\033[0m were found.\nMake and install the packages? [Y/n]: ");
         }
         input_successful = fgets(prompt, sizeof(prompt), stdin);
-        if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
+        if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
             printf("Installation aborted\n");
             free(found_pkg_names);
             cJSON_Delete(response_body);
@@ -1507,7 +1507,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         free(viewed_bases);
         printf("Continue Installation? [Y/n]: ");
         input_successful = fgets(prompt, sizeof(prompt), stdin);
-        if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
+        if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
             printf("Installation aborted\n");
             free(found_pkg_names);
             free(fetched_bases);
@@ -2734,7 +2734,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     printf("Upgrade these packages now? [Y/n]: ");
     char prompt[6];
     char *input_successful = fgets(prompt, sizeof(prompt), stdin);
-    if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
+    if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
         // free everything
         cJSON_Delete(response_body);
         for (uint32_t idx = 0; idx < install_count; idx++) {
