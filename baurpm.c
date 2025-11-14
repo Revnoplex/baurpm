@@ -2914,7 +2914,38 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             return 64;
         }
     }
-    uint8_t return_code = command_i(options, needs_update, outdated_count, package_data);
+    char **arg_list;
+    int32_t arg_list_len;
+    if (ignoring_packages) {
+        arg_list_len = 0;
+        arg_list = malloc(sizeof(void *)*(outdated_count+arg_len));
+        for (uint32_t idx = 0; idx < outdated_count; idx++) {
+            int32_t item_length;
+            for (item_length = 0; needs_update[idx][item_length] != '\0'; item_length++);
+            char *item = malloc(item_length+1);
+            snprintf(item, item_length+1, "%s", needs_update[idx]);
+            arg_list[arg_list_len] = item;
+            arg_list_len++;
+        }
+        for (int32_t idx = 0; idx < arg_len; idx++) {
+            int32_t item_length;
+            for (item_length = 0; arguments[idx][item_length] != '\0'; item_length++);
+            char *item = malloc(item_length+2);
+            snprintf(item, item_length+2, "-%s", arguments[idx]);
+            arg_list[arg_list_len] = item;
+            arg_list_len++;
+        }
+    } else {
+        arg_list_len = outdated_count;
+        arg_list = needs_update;
+    }
+    uint8_t return_code = command_i(options, arg_list, arg_list_len, package_data);
+    if (ignoring_packages) {
+        for (int32_t idx = 0; idx < arg_list_len; idx++) {
+            free(arg_list[idx]);
+        }
+        free(arg_list);
+    }
     cJSON_Delete(package_data);
     cJSON_Delete(response_body);
     for (uint32_t idx = 0; idx < install_count; idx++) {
