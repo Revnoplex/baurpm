@@ -1589,15 +1589,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     free(to_ignore);
                     return 14;
                 }
-                // FILE *makepkg_cmd;
-
-                // makepkg_cmd = popen("makepkg --printsrcinfo > .SRCINFO", "r");
-                // if (makepkg_cmd == NULL) {
-                //     fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: popen error\n");
-                //     return 14;
-                // }
-
-                // srcinfo_status_info = pclose(makepkg_cmd);
                 int srcinfo_status = WEXITSTATUS(srcinfo_status_info);
                 if (srcinfo_status_info == -1) {
                     fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: waitpid error -1\n");
