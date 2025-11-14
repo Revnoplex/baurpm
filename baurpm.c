@@ -1000,10 +1000,10 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     }
     cJSON_ArrayForEach(package, found_packages) {
         cJSON *pkg_name = cJSON_GetObjectItemCaseSensitive(package, "Name");
-        printf("View information for %s? [y/N]: ", pkg_name->valuestring);
+        printf("View information for %s? [Y/n]: ", pkg_name->valuestring);
         char prompt[6];
         char *input_successful = fgets(prompt, sizeof(prompt), stdin);
-        if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
+        if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
             continue;
         }
         cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
@@ -1087,9 +1087,9 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 }
             }
         }
-        printf("Download and view build files and PKGBUILD? [y/N]: ");
+        printf("Download and view build files and PKGBUILD? [Y/n]: ");
         input_successful = fgets(prompt, sizeof(prompt), stdin);
-        if (!(input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'y')) {
+        if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
             continue;
         }
         cJSON *url_path = cJSON_GetObjectItemCaseSensitive(package, "URLPath");
