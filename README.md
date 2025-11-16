@@ -52,7 +52,7 @@ You can install to PATH with
 sudo make install
 ```
 
-### Old Method
+## Building The C Version (Old Method)
 
 Running make by itself should generate `build/baurpm`
 ```sh
