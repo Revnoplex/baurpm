@@ -28,7 +28,7 @@ This is an AUR Helper so this will only run on arch based systems.
 
 ## Building The C Version.
 
-make sure all dependencies are installed
+Make sure all dependencies are installed
 ```sh
 sudo pacman -S --needed - < pkglist.txt
 ```
