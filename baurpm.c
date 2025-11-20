@@ -686,7 +686,7 @@ char *retry_download_pkg(char *url_path, uint8_t *status) {
     char *result = NULL;
     int32_t retries = 0;
     do {
-        if (retries >= 5) {
+        if (retries >= 10) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Failed to download the package: Max retry attempts exceeded\n");
             break;
         }
