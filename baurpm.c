@@ -569,7 +569,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
     char *download_path = malloc(path_size);
     snprintf(download_path, path_size, "%s/%s", downloads_dir_buffer, file_name_buffer);
     
-    free(downloads_dir_buffer);
+    // free(downloads_dir_buffer);
     
     CURL *curl;
     CURLcode res;
@@ -636,12 +636,15 @@ char *download_pkg(char *url_path, uint8_t *status) {
         So we can close it now */
         fclose(download_ptr);
         // And we won't need the url anymore.
-        free(url_buffer);
+        // except now
+        // free(url_buffer);
 
         /* Check for errors */
         if (res) {
             fprintf(stderr, "\r\x1b[1;31mError\x1b[0m: cURL error %d: %s\n", res, curl_easy_strerror(res));
             *status = 4;
+            free(downloads_dir_buffer);
+            free(url_buffer);
             free(file_name_buffer);
             curl_easy_cleanup(curl);
             free(aur_netloc);
@@ -657,6 +660,8 @@ char *download_pkg(char *url_path, uint8_t *status) {
                 err_msg_prefix, header_error
             );
             *status = 4;
+            free(downloads_dir_buffer);
+            free(url_buffer);
             free(file_name_buffer);
             curl_easy_cleanup(curl);
             free(aur_netloc);
@@ -671,11 +676,22 @@ char *download_pkg(char *url_path, uint8_t *status) {
                     fprintf(stderr, "\r%sHTTP Error %ld\n", err_msg_prefix, response_code);
                     *status = 5;
                     free(file_name_buffer);
+                    free(downloads_dir_buffer);
+                    free(url_buffer);
                     curl_easy_cleanup(curl);
                     free(aur_netloc);
                     return download_path;
                 }
                 fprintf(stderr, "\r%sExcpected a %s response, got a %s response instead.\n", err_msg_prefix, type_match, content_type->value);
+                fprintf(
+                    stderr, 
+                    "Downloading snapshot urls using programs like this have recently been blocked by pow captchas.\n"
+                    "This aur helper is currently broken until git clone is implemented.\n"
+                    "In the meantime, please manually dowload the package from %s in your browser and save the file to %s\n", 
+                    url_buffer, downloads_dir_buffer
+                );
+                free(downloads_dir_buffer);
+                free(url_buffer);
                 *status = 7;
                 free(file_name_buffer);
                 curl_easy_cleanup(curl);
@@ -683,6 +699,8 @@ char *download_pkg(char *url_path, uint8_t *status) {
                 return download_path;
             }
         }
+        free(downloads_dir_buffer);
+        free(url_buffer);
 
         long response_code;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
