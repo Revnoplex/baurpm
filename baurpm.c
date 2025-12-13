@@ -647,6 +647,42 @@ char *download_pkg(char *url_path, uint8_t *status) {
             free(aur_netloc);
             return download_path;
         }
+        struct curl_header *content_type;
+        CURLHcode header_error;
+        header_error = curl_easy_header(curl, "Content-Type", 0, CURLH_HEADER, -1, &content_type);
+        if (header_error) {
+            fprintf(
+                stderr, 
+                "\r%sFailed to get content type: cURL Error %d\n", 
+                err_msg_prefix, header_error
+            );
+            *status = 4;
+            free(file_name_buffer);
+            curl_easy_cleanup(curl);
+            free(aur_netloc);
+            return download_path;
+        }
+        char type_match[] = "application/x-gzip";
+        for (uint8_t type_idx = 0; type_idx < sizeof(type_match); type_idx++) {
+            if (content_type->value[type_idx] != type_match[type_idx] && content_type->value[type_idx] != ';') {
+                long response_code;
+                curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+                if (response_code >= 400) {
+                    fprintf(stderr, "\r%sHTTP Error %ld\n", err_msg_prefix, response_code);
+                    *status = 5;
+                    free(file_name_buffer);
+                    curl_easy_cleanup(curl);
+                    free(aur_netloc);
+                    return download_path;
+                }
+                fprintf(stderr, "\r%sExcpected a %s response, got a %s response instead.\n", err_msg_prefix, type_match, content_type->value);
+                *status = 7;
+                free(file_name_buffer);
+                curl_easy_cleanup(curl);
+                free(aur_netloc);
+                return download_path;
+            }
+        }
 
         long response_code;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
