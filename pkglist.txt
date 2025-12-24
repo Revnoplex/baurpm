@@ -2,3 +2,4 @@ curl
 cjson
 libarchive
 sudo
+libgit2

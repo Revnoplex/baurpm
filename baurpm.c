@@ -20,6 +20,8 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <git2.h>
+#include <sys/ioctl.h>
 
 #define LONG_NAME "Basic Arch User Repository (AUR) Package Manager"
 #define SHORT_NAME "baurpm"
@@ -28,6 +30,11 @@
 #define LICENSE "MIT"
 #define COPYRIGHT "Copyright (c) 2022-2025"
 #define AUR_BASE_URL "https://aur.archlinux.org"
+#define SUFFIX_MAX_SIZE sizeof("[ 100% ]")
+
+struct winsize term_size;
+struct timespec time_spec;
+uint64_t last_spec = 0;
 
 typedef int (*stdcall)(char *, char *[], int32_t, cJSON *);
 
@@ -40,6 +47,31 @@ struct memory {
     char *response;
     size_t size;
   };
+
+typedef struct progress_data {
+	git_indexer_progress fetch_progress;
+    const char *operation;
+	const char *path;
+} progress_data;
+
+/*
+    Exit codes:
+    0: OK
+    1: User Error
+    2: Requested Resource Not Found
+    3: Filesystem Related Errors
+    4: 3rd party errors
+    5: Web Errors
+    6: Unexpected return/contents/reponse
+    7: Parsing related errors
+    8: Unintended Behaviour
+    9: Buffer exhausted
+    10: Miscellanious
+
+    32+: makepkg errors
+    64+: pacman errors
+    128+: signals
+    */
    
 
 int rmrf(const char *path, const struct stat *stat_info, int typeflag, struct FTW *ftwbuf) {
@@ -287,13 +319,22 @@ char *byte_units(uint64_t byte_size) {
     // create buffer to store the string representation
     uint8_t buffer_size = 18;
     char *rep_buffer = malloc(buffer_size);
+    if (rep_buffer == NULL) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+        return NULL;
+    }
 
     // construct the string with 4 significant figures
-    snprintf(
-        rep_buffer, buffer_size, "%.4g %s", 
-        (double) byte_size/u64_pow(1024, xp), 
-        (byte_size == 1) ? "byte" : unit_names[xp]
-    );
+    if (
+        snprintf(
+            rep_buffer, buffer_size, "%.4g %s", 
+            (double) byte_size/u64_pow(1024, xp), 
+            (byte_size == 1) ? "byte" : unit_names[xp]
+        ) < 0
+    ) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't concatenate string: %s\n", strerror(errno));
+        return NULL;
+    }
     return rep_buffer;
 }
 
@@ -301,7 +342,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
     const char *err_msg_prefix = "\x1b[1;31mFatal\x1b[0m: Failed to get information on the package/s: "; 
     if (!pkg_len) {
         fprintf(stderr, "\x1b[1;31mError\x1b[0m: No packages were given to look for.\n");
-        *status = 20;
+        *status = 8;
         return cJSON_CreateNull();
     }
     uint32_t url_args_size = 0;
@@ -359,7 +400,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
         /* Check for errors */
         if (res) {
             fprintf(stderr, "%scURL Error %d: %s\n", err_msg_prefix, res, curl_easy_strerror(res));
-            *status = 4;
+            *status = 5;
             curl_easy_cleanup(curl);
             return cJSON_CreateNull();
         }
@@ -374,7 +415,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
             );
             curl_easy_cleanup(curl);
             free(chunk.response);
-            *status = 4;
+            *status = 5;
             return cJSON_CreateNull();
         }
         char type_match[] = "application/json";
@@ -392,7 +433,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
                 fprintf(stderr, "%sExcpected a %s response, got a %s response instead.\n", err_msg_prefix, type_match, content_type->value);
                 curl_easy_cleanup(curl);
                 free(chunk.response);
-                *status = 7;
+                *status = 6;
                 return cJSON_CreateNull();
             }
         }
@@ -407,7 +448,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
             }
             curl_easy_cleanup(curl);
             free(chunk.response);
-            *status = 8;
+            *status = 7;
             return cJSON_CreateNull();
         }
         free(chunk.response);
@@ -422,7 +463,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
         if ((aur_response_type_key && aur_response_type_key->valuestring)) {
             aur_response_type = aur_response_type_key->valuestring;
         } else {
-            *status = 9;
+            *status = 6;
             fprintf(stderr, "%sMissing JSON key in API response: 'type'\n", err_msg_prefix);
             return parsed_response;
         }
@@ -437,7 +478,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
                     } else {
                         fprintf(stderr, "%sAURWEB RPC Error\n", err_msg_prefix);
                     }
-                    *status = 6;
+                    *status = 5;
                     return parsed_response;
                 }
             }
@@ -453,7 +494,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
                 } else {
                     fprintf(stderr, "%sAURWEB RPC Error\n", err_msg_prefix);
                 }
-                *status = 6;
+                *status = 5;
                 return parsed_response;
             }
         }
@@ -462,7 +503,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
         if (result_count_key && cJSON_IsNumber(result_count_key)) {
             result_count = result_count_key->valueint;
         } else {
-            *status = 9;
+            *status = 6;
             fprintf(stderr, "%sMissing JSON key in API response: 'resultcount'\n", err_msg_prefix);
             return parsed_response;
         }
@@ -501,7 +542,7 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
     free(url_buffer);
     curl_easy_cleanup(curl);
     fprintf(stderr, "%scURL init failure\n", err_msg_prefix);
-    *status = 3;
+    *status = 4;
     return cJSON_CreateNull();
 
 }
@@ -512,8 +553,8 @@ char *download_pkg(char *url_path, uint8_t *status) {
     struct passwd* pwd = getpwuid(uid);
 
     if (!pwd) {
-        fprintf(stderr, "%sPasswd Error", err_msg_prefix);
-        *status = 10;
+        fprintf(stderr, "%sCould not get home directory\n", err_msg_prefix);
+        *status = 3;
         return "";
     }
     uint32_t hdirc;
@@ -562,7 +603,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
     }
     if (!file_name_buffer) {
         fprintf(stderr, "%s Failed to extract filename from URL provided by the API", err_msg_prefix);
-        *status = 11;
+        *status = 7;
         return "";
     }
     uint32_t path_size = dirc + sizeof_url_path-slash_index;
@@ -642,7 +683,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
         /* Check for errors */
         if (res) {
             fprintf(stderr, "\r\x1b[1;31mError\x1b[0m: cURL error %d: %s\n", res, curl_easy_strerror(res));
-            *status = 4;
+            *status = 5;
             free(downloads_dir_buffer);
             free(url_buffer);
             free(file_name_buffer);
@@ -659,7 +700,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
                 "\r%sFailed to get content type: cURL Error %d\n", 
                 err_msg_prefix, header_error
             );
-            *status = 4;
+            *status = 5;
             free(downloads_dir_buffer);
             free(url_buffer);
             free(file_name_buffer);
@@ -682,17 +723,17 @@ char *download_pkg(char *url_path, uint8_t *status) {
                     free(aur_netloc);
                     return download_path;
                 }
-                fprintf(stderr, "\r%sExcpected a %s response, got a %s response instead.\n", err_msg_prefix, type_match, content_type->value);
+                fprintf(stderr, "\r\x1b[1;31mError\x1b[0m: Excpected a %s response, got a %s response instead.\n", type_match, content_type->value);
                 fprintf(
                     stderr, 
-                    "Downloading snapshot urls using programs like this have recently been blocked by pow captchas.\n"
+                    "\x1b[1;33mATTENTION\x1b[0m: Downloading snapshot urls using programs like this have recently been blocked by pow captchas.\n"
                     "This aur helper is currently broken until git clone is implemented.\n"
                     "In the meantime, please manually dowload the package from %s in your browser and save the file to %s\n", 
                     url_buffer, downloads_dir_buffer
                 );
                 free(downloads_dir_buffer);
                 free(url_buffer);
-                *status = 7;
+                *status = 0;
                 free(file_name_buffer);
                 curl_easy_cleanup(curl);
                 free(aur_netloc);
@@ -731,7 +772,7 @@ char *download_pkg(char *url_path, uint8_t *status) {
     // along with curl
     curl_easy_cleanup(curl);
     fprintf(stderr, "%scURL init failure\n", err_msg_prefix);
-    *status = 3;
+    *status = 4;
     return download_path;
 
 }
@@ -755,6 +796,803 @@ char *retry_download_pkg(char *url_path, uint8_t *status) {
         retries++;
     } while (*status == 5 || *status == 4);
     return result;
+}
+
+char *progress_bar(uint16_t columns, char *prefix, int32_t prefix_size, char *suffix, int32_t suffix_size, uint64_t numerator, uint64_t denominator) {
+    if (!denominator) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Got unexpected zero value while creating progress bar!\n");
+        return NULL;
+    }
+    for (int32_t idx = prefix_size; idx < columns+1; idx++) {
+        prefix[idx] = ' ';
+    }
+    for (int32_t idx = 0; idx < suffix_size; idx++) {
+        prefix[columns-suffix_size+idx] = suffix[idx];
+    }
+    prefix[columns] = '\0';
+    char *full_bar = malloc(columns+9);
+    if (full_bar == NULL) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+        return NULL;
+    }
+    char escape_prefix[] = "\x1b[7m";
+    if (snprintf(full_bar, sizeof(escape_prefix), "%s", escape_prefix) < 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't concatenate string: %s\n", strerror(errno));
+        return NULL;
+    }
+    char insert[] = "\x1b[0m";
+    int32_t insert_offset = columns*numerator / denominator;
+    for (int32_t idx = 4; idx < columns+9; idx++) {
+        if (idx >= insert_offset+4 && idx < insert_offset+4+4) {
+            full_bar[idx] = insert[idx-insert_offset-4];
+        } else {
+            if (idx <= columns+8) {
+                int32_t data_offset = 4;
+                if (idx >= insert_offset+4) {
+                    data_offset = 8;
+                }
+                full_bar[idx] = prefix[idx-data_offset];
+            } else {
+                full_bar[idx] = 'E';
+            }
+        }
+    }
+    full_bar[columns+9-1] = '\0';
+    return full_bar;
+}
+
+static int print_progress(const progress_data *pd) {
+    if (ioctl(1, TIOCGWINSZ, &term_size) == -1) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Could't get terminal size: ioctl error %d: %s\n", errno, strerror(errno));
+        return -1;
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &time_spec) == -1) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't get timestamp: errno %d: %s\n", errno, strerror(errno));
+        return -1;
+    }
+    uint64_t duration_elapsed = time_spec.tv_sec * 1000000 + time_spec.tv_nsec / 1000 - last_spec;
+    last_spec = last_spec ? last_spec : (uint64_t) time_spec.tv_sec * 1000000 + time_spec.tv_nsec / 1000;
+    double seconds_elasped = (double) duration_elapsed / 1000000;
+    uint64_t download_rate = pd->fetch_progress.received_bytes / seconds_elasped;
+
+    char *prefix = malloc(term_size.ws_col+1);
+    if (prefix == NULL) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+        return -1;
+    }
+    int32_t prefix_size;
+    int32_t suffix_size;
+    char *suffix;
+    char *full_bar;
+	int network_percent = pd->fetch_progress.total_objects > 0 ?
+		(100*pd->fetch_progress.received_objects) / pd->fetch_progress.total_objects :
+		0;
+	int index_percent = pd->fetch_progress.total_objects > 0 ?
+		(100*pd->fetch_progress.indexed_objects) / pd->fetch_progress.total_objects :
+		0;
+    int delta_percent = pd->fetch_progress.total_deltas > 0 ?
+		(100*pd->fetch_progress.indexed_deltas) / pd->fetch_progress.total_deltas :
+		0;
+    int numerator = pd->fetch_progress.received_objects+pd->fetch_progress.indexed_objects+pd->fetch_progress.indexed_deltas;
+    int denominator = pd->fetch_progress.total_objects > 0 ? 2*pd->fetch_progress.total_objects+pd->fetch_progress.indexed_deltas : 1;
+    int total_percent = (100*numerator) / denominator;
+	char *download_bytes = byte_units(pd->fetch_progress.received_bytes);
+    if (download_bytes == NULL) {
+        return -1;
+    }
+    char *download_bytes_rate = byte_units(download_rate);
+    if (download_bytes_rate == NULL) {
+        return -1;
+    }
+    prefix_size = snprintf(prefix, term_size.ws_col+1, 
+        "%s %s: Download: [%s, %s/s, %5u/%5u] (%3d%%), Idx: %5u/%5u (%3d%%), Delta: %5u/%5u (%3d%%)",
+        pd->operation, pd->path, 
+        download_bytes, download_bytes_rate, pd->fetch_progress.received_objects, pd->fetch_progress.total_objects, network_percent, 
+        pd->fetch_progress.indexed_objects, pd->fetch_progress.total_objects, index_percent,
+        pd->fetch_progress.indexed_deltas, pd->fetch_progress.total_deltas, delta_percent
+    );
+    if (prefix_size < 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't concatenate string: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    if ((suffix = malloc(SUFFIX_MAX_SIZE)) == NULL) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    if ((suffix_size = snprintf(suffix, SUFFIX_MAX_SIZE, "[ %3d%% ]", total_percent)) < 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't concatenate string: %s\n", strerror(errno));
+        return -1;
+    }
+    
+    if ((full_bar = progress_bar(term_size.ws_col, prefix, prefix_size, suffix, suffix_size, numerator, denominator)) == NULL) {
+        return -1;
+    }
+    printf("%s\r", full_bar);
+    free(full_bar);
+    free(suffix);
+    free(download_bytes);
+    free(download_bytes_rate);
+    free(prefix);
+    fflush(stdout);
+    return 0;
+}
+
+static int update_cb(const char *refname, const git_oid *a, const git_oid *b, git_refspec *spec, void *data) {
+	char a_str[GIT_OID_SHA1_HEXSIZE+1], b_str[GIT_OID_SHA1_HEXSIZE+1];
+	git_buf remote_name;
+	(void)data;
+
+	if (git_refspec_rtransform(&remote_name, spec, refname) < 0)
+		return -1;
+
+	git_oid_fmt(b_str, b);
+	b_str[GIT_OID_SHA1_HEXSIZE] = '\0';
+
+	if (git_oid_is_zero(a)) {
+		printf("[new]     %.20s %s -> %s\n", b_str, remote_name.ptr, refname);
+	} else {
+		git_oid_fmt(a_str, a);
+		a_str[GIT_OID_SHA1_HEXSIZE] = '\0';
+		printf("[updated] %.10s..%.10s %s -> %s\n", a_str, b_str, remote_name.ptr, refname);
+	}
+    git_buf_free(&remote_name);
+
+	return 0;
+}
+
+static int sideband_progress(const char *str, int len, void *payload) {
+	(void)payload; /* unused */
+	printf("remote: %.*s", len, str);
+	fflush(stdout);
+	return 0;
+}
+
+static int fetch_progress(const git_indexer_progress *stats, void *payload) {
+	progress_data *pd = (progress_data*)payload;
+	pd->fetch_progress = *stats;
+	return print_progress(pd);
+}
+
+struct fh_cb_ctx {
+    git_repository *repo;
+    git_annotated_commit **head;
+};
+
+static int fh_cb(
+    const char *ref_name, const char *remote_url, const git_oid *oid, 
+    unsigned int is_merge, void *payload
+) {
+    (void)ref_name;
+    (void)remote_url;
+    struct fh_cb_ctx *ctx = (struct fh_cb_ctx *)payload;
+
+    if (!is_merge)
+        return 0;
+
+    if (*(ctx->head) != NULL) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Multiple merge heads are not supported\n");
+        return 8;
+    }
+
+    if (git_annotated_commit_lookup(ctx->head, ctx->repo, oid) < 0) {
+        const git_error *err = git_error_last();
+		if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup annotated commit: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup annotated commit");
+        }
+        return 4;
+    }
+
+    return 1;
+}
+
+static int perform_fastforward(git_repository *repo, const git_oid *target_oid, int is_unborn) {
+	git_checkout_options ff_checkout_options;
+    if (git_checkout_options_init(&ff_checkout_options, GIT_CHECKOUT_OPTIONS_VERSION) < 0) {
+        const git_error *err = git_error_last();
+		if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git checkout options: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git checkout options");
+        }
+        return -1;
+    }
+	git_reference *target_ref = NULL;
+	git_reference *new_target_ref = NULL;
+	git_object *target = NULL;
+    git_reference *head_ref = NULL;
+	int result = 0;
+
+	if (is_unborn) {
+		const char *symbolic_ref;
+
+		/* HEAD reference is unborn, lookup manually so we don't try to resolve it */
+        if (git_reference_lookup(&head_ref, repo, "HEAD") != 0) {
+            const git_error *err = git_error_last();
+            if (err) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD ref: libgit2 error %d: %s\n", err->klass, err->message);
+            } else {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD ref");
+            }
+            return -1;
+        }
+
+		/* Grab the reference HEAD should be pointing to */
+        if ((symbolic_ref = git_reference_symbolic_target(head_ref)) == NULL) {
+            const git_error *err = git_error_last();
+            if (err) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get symbolic HEAD ref: libgit2 error %d: %s\n", err->klass, err->message);
+            } else {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get symbolic HEAD ref");
+            }
+			goto cleanup;
+		}
+
+		/* Create our master reference on the target OID */
+		if ((result = git_reference_create(&target_ref, repo, symbolic_ref, target_oid, 0, NULL)) != 0) {
+            const git_error *err = git_error_last();
+            if (err) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to create master reference: libgit2 error %d: %s\n", err->klass, err->message);
+            } else {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to create master reference");
+            }
+			goto cleanup;
+		}
+	} else {
+		/* HEAD exists, just lookup and resolve */
+        if (git_repository_head(&target_ref, repo) != 0) {
+            const git_error *err = git_error_last();
+            if (err) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get HEAD reference: libgit2 error %d: %s\n", err->klass, err->message);
+            } else {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get HEAD reference");
+            }
+			return -1;
+		}
+	}
+
+	/* Lookup the target object */
+    if ((result = git_object_lookup(&target, repo, target_oid, GIT_OBJECT_COMMIT)) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup OID %s: libgit2 error %d: %s\n", git_oid_tostr_s(target_oid), err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup OID %s", git_oid_tostr_s(target_oid));
+        }
+        goto cleanup;
+    }
+
+	/* Checkout the result so the workdir is in the expected state */
+	ff_checkout_options.checkout_strategy = GIT_CHECKOUT_SAFE;
+    if ((result = git_checkout_tree(repo, target, &ff_checkout_options)) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to checkout HEAD reference: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to checkout HEAD reference");
+        }
+        goto cleanup;
+    }
+
+	/* Move the target reference to the target OID */
+    if ((result = git_reference_set_target(&new_target_ref, target_ref, target_oid, NULL)) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to move HEAD referencee: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to move HEAD reference");
+        }
+        goto cleanup;
+    }
+
+cleanup:
+    git_reference_free(head_ref);
+	git_reference_free(target_ref);
+	git_reference_free(new_target_ref);
+	git_object_free(target);
+
+	return result ? -1 : 0;
+}
+
+int status_cb(const char *path, unsigned int status_flags, void *payload) {
+    (void)payload;
+    if (status_flags == GIT_STATUS_WT_NEW || status_flags == GIT_STATUS_IGNORED) {
+        printf("Removing %s\n", path);
+        if(nftw(path, rmrf, 64, FTW_DEPTH | FTW_PHYS)) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Removing path %s failed: %s\n", path, strerror(errno));
+            return 1;
+        }
+    }
+    return 0;
+}
+
+uint32_t git_clone_pkg(cJSON *pkg) {
+    cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(pkg, "PackageBase");
+    git_repository *cloned_repo = NULL;
+
+	progress_data pd = {0};
+    uint32_t return_code = 0;
+
+    git_checkout_options checkout_opts;
+    if (git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git checkout options: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git checkout options");
+        }
+        return 4;
+    }
+
+    git_clone_options clone_opts;
+    if (git_clone_options_init(&clone_opts, GIT_CLONE_OPTIONS_VERSION) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git clone options: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git clone options");
+        }
+        return 4;
+    }
+
+    if (!pkg_base || !(pkg_base->valuestring)) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Required data for package base name went missing.\n");
+        return 6;
+    }
+    const char *base_name = pkg_base->valuestring;
+    const char url_prefix[] = ".git";
+    pd.path = base_name;
+    pd.operation = "Cloning";
+
+    // we need to calculate the size of url_path
+    uint32_t base_name_size;
+    for ( base_name_size = 0;  base_name[ base_name_size] != '\0';  base_name_size++);
+    /* note that this does not include the null terminator but sizeof(AUR_BASE_URL) does. 
+    So we will get space for a terminator at the end and an extra space for the / from sizeof()
+    */
+    
+    // calculate the url buffer size
+    // should be the addition of the sizes of 2 parts: the base url and the url path
+    uint32_t url_size = sizeof(AUR_BASE_URL) + base_name_size+sizeof(url_prefix);
+    
+    // then allocate the buffer for the url
+    char *url_buffer = malloc(url_size);
+    if (url_buffer == NULL) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+        return 8;
+    }
+   
+    // then construct the url
+    if (snprintf(url_buffer, url_size, "%s/%s%s", AUR_BASE_URL, base_name, url_prefix) < 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't concatenate string: %s\n", strerror(errno));
+        return_code = 8;
+        goto cleanup;
+    }
+
+    printf("Cloning %s...\n", base_name);
+    
+    if (git_libgit2_init() < 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise libgit2: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise libgit2");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+    
+
+	checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+	clone_opts.checkout_opts = checkout_opts;
+	clone_opts.fetch_opts.callbacks.sideband_progress = sideband_progress;
+	clone_opts.fetch_opts.callbacks.transfer_progress = &fetch_progress;
+	clone_opts.fetch_opts.callbacks.payload = &pd;
+    
+    if (git_clone(&cloned_repo, url_buffer, base_name, &clone_opts) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to clone %s: libgit2 error %d: %s\n", base_name, err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to clone %s", base_name);
+        }
+        return_code = 4;
+    }
+    printf("\n");
+
+    cleanup:
+        free(url_buffer);
+        if (cloned_repo) {
+            git_repository_free(cloned_repo);
+        }
+        git_libgit2_shutdown();
+	    return return_code;
+}
+
+uint32_t git_pull_pkg(cJSON *pkg, int32_t keep_existing) {
+    cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(pkg, "PackageBase");
+
+    uint32_t return_code = 0;
+    git_remote *remote;
+    git_reference *head = NULL;
+    git_reference *upstream = NULL;
+    git_buf remote_name = GIT_BUF_INIT;
+    git_repository *repo = NULL;
+    progress_data pd = {0};
+    git_fetch_options fetch_opts;
+    char *received_bs = NULL;
+    int result;
+	git_repository_state_t state;
+	git_merge_analysis_t analysis;
+	git_merge_preference_t preference;
+    if (git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git fetch options: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git fetch options");
+        }
+        return 4;
+    }
+
+    if (!pkg_base || !(pkg_base->valuestring)) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Required data for package base name went missing.\n");
+        return 6;
+    }
+    const char *base_name = pkg_base->valuestring;
+    pd.path = base_name;
+    pd.operation = "Fetching";
+
+    if (git_libgit2_init() < 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise libgit2: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise libgit2");
+        }
+        return 4;
+    }
+
+    // setup remote
+    if (git_repository_open(&repo, base_name) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to open repository: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to open repository");
+        }
+        return 4;
+    }
+    if (git_repository_head(&head, repo) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get repository head: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get repository head");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+    if (git_branch_upstream(&upstream, head) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get branch upstream: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get branch upstream");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    if (git_branch_remote_name(&remote_name, repo, git_reference_name(upstream)) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get branch remote name: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get branch remtoe");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    if (git_remote_lookup(&remote, repo, remote_name.ptr) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup remote: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup remote");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    fetch_opts.callbacks.update_refs = &update_cb;
+	fetch_opts.callbacks.sideband_progress = sideband_progress;
+	fetch_opts.callbacks.transfer_progress = &fetch_progress;
+	fetch_opts.callbacks.payload = &pd;
+
+    // equivalent of git clean -dfxn
+    if (!keep_existing) {
+        git_status_options status_opts;
+        
+        if (git_status_options_init(&status_opts, GIT_STATUS_OPTIONS_VERSION) != 0) {
+            const git_error *err = git_error_last();
+            if (err) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git status options: libgit2 error %d: %s\n", err->klass, err->message);
+            } else {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git status options");
+            }
+            return_code = 4;
+            goto cleanup;
+        }
+
+        status_opts.show  = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
+        status_opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED | GIT_STATUS_OPT_INCLUDE_IGNORED;
+
+        if (git_repository_is_bare(repo)) {
+            fprintf(stderr, "%s %s\n", "Cannot clean bare repository", git_repository_path(repo));
+            return_code = 8;
+            goto cleanup;
+        }
+
+        if (chdir(base_name) < 0) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to change directory to %s: %s", base_name, strerror(errno));
+            return_code = 3;
+            goto cleanup;
+        }
+
+        result = git_status_foreach_ext(repo, &status_opts, status_cb, NULL);
+        if (result == 1) {
+            return_code = 3;
+            goto cleanup;
+        }
+        if (result < 0) {
+            const git_error *err = git_error_last();
+            if (err) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to list files to clean: libgit2 error %d: %s\n", err->klass, err->message);
+            } else {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to list files to clean");
+            }
+            return_code = 4;
+            goto cleanup;
+        }
+        if (chdir("..") < 0) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to traverse to parent directory: %s", strerror(errno));
+            return_code = 3;
+            goto cleanup;
+        }
+    }
+    printf("Fetching %s...\n", base_name);
+
+    if (git_remote_fetch(remote, NULL, &fetch_opts, "fetch") != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to fetch %s: libgit2 error %d: %s\n", base_name, err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to fetch %s", base_name);
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    const git_indexer_progress *stats = git_remote_stats(remote);
+    if (stats != NULL && (received_bs = byte_units(stats->received_bytes)) != NULL) {
+        if (stats->local_objects > 0) {
+            printf("\rReceived %u/%u objects in %s (used %u local objects)\n",
+                stats->indexed_objects, stats->total_objects, received_bs, stats->local_objects);
+        } else{
+            printf("\rReceived %u/%u objects in %s\n",
+                stats->indexed_objects, stats->total_objects, received_bs);
+        }
+    }
+
+    state = git_repository_state(repo);
+	if (state != GIT_REPOSITORY_STATE_NONE) {
+		fprintf(stderr, "\x1b[1;31mError\x1b[0m: Repository is in unexpected state %d\n", state);
+        return_code = 8;
+		goto cleanup;
+	}
+
+    git_annotated_commit *merge_head = NULL;
+
+    result = git_repository_fetchhead_foreach(repo, fh_cb, &(struct fh_cb_ctx) {repo, &merge_head});
+    if (result > 1) {
+        return_code = result;
+        goto cleanup;
+    }
+    if (result < 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to fetch head for merge analysis: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to fetch head for merge analysis");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+    
+
+    if (git_merge_analysis(&analysis, &preference, repo, (const git_annotated_commit *[]){merge_head}, 1) < 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Merge analysis failed: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Merge analysis failed");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    typedef struct {
+        int key;
+        const char *value;
+    } AnalysisLookup;
+
+    AnalysisLookup analysis_lookup[] = {
+        {GIT_MERGE_ANALYSIS_FASTFORWARD, "Fast Forward"},
+        {GIT_MERGE_ANALYSIS_NONE, "None"},
+        {GIT_MERGE_ANALYSIS_NORMAL, "Normal"},
+        {GIT_MERGE_ANALYSIS_UNBORN, "Unborn"},
+        {GIT_MERGE_ANALYSIS_UP_TO_DATE, "Up to date"}
+    };
+
+    for (uint64_t idx = 0; idx < sizeof(analysis_lookup) / sizeof(analysis_lookup[0]); idx++) {
+        if (analysis & analysis_lookup[idx].key) {
+            printf("Git Analysis: %s\n", analysis_lookup[idx].value);
+        }
+    }
+
+    if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE) {
+		goto cleanup;
+	} 
+    if (analysis & GIT_MERGE_ANALYSIS_UNBORN ||
+	          (analysis & GIT_MERGE_ANALYSIS_FASTFORWARD &&
+	          !(preference & GIT_MERGE_PREFERENCE_NO_FASTFORWARD))) {
+		const git_oid *target_oid;
+
+		/* Since this is a fast-forward, there can be only one merge head */
+		target_oid = git_annotated_commit_id(merge_head);
+
+		return_code = perform_fastforward(repo, target_oid, (analysis & GIT_MERGE_ANALYSIS_UNBORN));
+        goto cleanup;
+	}
+    if (analysis & GIT_MERGE_ANALYSIS_NORMAL) {
+		git_merge_options merge_opts;
+		git_checkout_options checkout_opts;
+        if (git_merge_options_init(&merge_opts, GIT_MERGE_OPTIONS_VERSION) != 0) {
+            const git_error *err = git_error_last();
+            if (err) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git merge options: libgit2 error %d: %s\n", err->klass, err->message);
+            } else {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git merge options");
+            }
+            return_code = 4;
+            goto cleanup;
+        }
+
+        if (git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION) != 0) {
+            const git_error *err = git_error_last();
+            if (err) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git checkout options: libgit2 error %d: %s\n", err->klass, err->message);
+            } else {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git checkout options");
+            }
+            return_code = 4;
+            goto cleanup;
+        }
+
+		merge_opts.flags = 0;
+		merge_opts.file_flags = GIT_MERGE_FILE_STYLE_DIFF3;
+
+		checkout_opts.checkout_strategy = GIT_CHECKOUT_FORCE|GIT_CHECKOUT_ALLOW_CONFLICTS;
+
+		if (preference & GIT_MERGE_PREFERENCE_FASTFORWARD_ONLY) {
+			fprintf(stderr, "\x1b[1;31mError\x1b[0m: Fast-forward is preferred, but only a merge is possible\n");
+			return_code = 8;
+            goto cleanup;
+		}
+        
+        printf("A Merge is needed to complete git pull. Please discard changes or run git merge\n");
+        return_code = 1;
+	}
+
+    cleanup:
+        git_reference_free(head);
+        git_reference_free(upstream);
+        git_buf_free(&remote_name);
+        if (repo) {
+            git_repository_free(repo);
+        }
+        git_annotated_commit_free(merge_head);
+        free(received_bs);
+        git_remote_free(remote);
+        git_libgit2_shutdown();
+        return return_code;
+}
+
+uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
+    int return_code = 0;
+    char **downloaded_bases = malloc(pkgc * sizeof(void *));
+    if (downloaded_bases == NULL) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+        return 8;
+    }
+    uint32_t downloaded_bases_count = 0;
+    cJSON *package = NULL;
+    cJSON_ArrayForEach(package, pkgv) {
+        cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
+        if (!pkg_base || !(pkg_base->valuestring)) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Required data for package base name went missing.\n");
+            return_code = 6;
+            break;
+        }
+        uint8_t base_match = 0;
+        for (uint32_t idx = 0; idx < downloaded_bases_count && idx < pkgc; idx++) {
+            for (uint32_t str_idx = 0; pkg_base->valuestring[str_idx] == downloaded_bases[idx][str_idx]; str_idx++) {
+                if (pkg_base->valuestring[str_idx] == '\0') {
+                    base_match = 1;
+                    break;
+                }
+            }
+        }
+        if (base_match) {
+            continue;
+        }
+        downloaded_bases[downloaded_bases_count] = pkg_base->valuestring;
+        downloaded_bases_count++;
+
+        uid_t uid = getuid();
+        struct passwd* pwd = getpwuid(uid);
+
+        if (!pwd) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory\n");
+            free(downloaded_bases);
+            return 3;
+        }
+        uint32_t hdirc;
+        for (hdirc = 0; pwd->pw_dir[hdirc] != '\0'; hdirc++);
+        char cache_dir[] = ".cache/baurpm";
+        uint32_t dirc = hdirc + sizeof(cache_dir) + 1;
+        char *cache_dir_buffer = malloc(dirc);
+        if (cache_dir_buffer == NULL) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+            return_code = 8;
+            break;
+        }
+
+        // construct path
+        if (snprintf(cache_dir_buffer, dirc, "%s/%s", pwd->pw_dir, cache_dir) < 0) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't concatenate string: %s\n", strerror(errno));
+            free(cache_dir_buffer);
+            return_code = 8;
+            break;
+        }
+
+        if (chdir(cache_dir_buffer) < 0) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to change directory to %s: %s", cache_dir_buffer, strerror(errno));
+            free(cache_dir_buffer);
+            return_code = 3;
+            break;
+        }
+        free(cache_dir_buffer);
+        // extract package
+        struct stat stat_info;
+        int stat_status = stat(pkg_base->valuestring, &stat_info);
+        if (stat_status == 0 && S_ISDIR(stat_info.st_mode)) {
+            return_code = git_pull_pkg(package, keep_existing);
+        } else {
+            return_code = git_clone_pkg(package);
+        }
+        if (return_code) {
+            break;
+        }
+    }
+    free(downloaded_bases);
+    return return_code;
 }
 
 uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
@@ -853,7 +1691,7 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_exis
         if (!*download_path) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
             free(downloaded_bases);
-            return 12;
+            return 6;
         }
         uid_t uid = getuid();
         struct passwd* pwd = getpwuid(uid);
@@ -862,7 +1700,7 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_exis
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory\n");
             free(download_path);
             free(downloaded_bases);
-            return 10;
+            return 3;
         }
         uint32_t hdirc;
         for (hdirc = 0; pwd->pw_dir[hdirc] != '\0'; hdirc++);
@@ -887,34 +1725,28 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_exis
 }
 
 struct commandDocs {
-    char names[7];
-    char *descriptions[7];
-    char *usages[7];
-    char *options[7][8];
+    char names[4];
+    char *descriptions[4];
+    char *usages[4];
+    char *options[4][8];
 };
 
 int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
     cJSON_Delete(_);
     (void)(options);
     struct commandDocs command_docs = {
-        { 'H', 'G', 'I', 'C', 'U', 'V', 'A' },
+        { 'H', 'G', 'I', 'C'},
         { 
             "Displays this message", 
             "Get info on an AUR package", 
             "Install an AUR package without keeping the download", 
             "Check for newer versions of installed packages", 
-            "Upgrade packages that have been downloaded in ~/stored-aur-packages (not yet implemented)", 
-            "", 
-            "Install an AUR packages while keeping the download" 
         },
         {
             " [command-name]",
             " [package]",
             "[options] [package(s)]",
             "[options] [arguments]",
-            "",
-            "",
-            ""
         },
         {
             { "" },
@@ -934,15 +1766,12 @@ int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
                 "d: Keep existing cache directories when extracting",
                 ""
             },
-            { "" },
-            { "" },
-            { "" },
         },
     };
 
     if (arg_len) {
         int32_t cmd_idx;
-        for (cmd_idx = 0; cmd_idx < 7; cmd_idx++) {
+        for (cmd_idx = 0; cmd_idx < 4; cmd_idx++) {
             if ((arguments[0][0] & 95) == command_docs.names[cmd_idx]) {
                 char *description;
                 if (command_docs.descriptions[cmd_idx][0]) {
@@ -977,7 +1806,7 @@ int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
         printf("Usage: %s [command][options] [arguments]\n", SHORT_NAME);
         printf("Executable commands:\n");
         int32_t cmd_idx;
-        for (cmd_idx = 0; cmd_idx < 7; cmd_idx++) {
+        for (cmd_idx = 0; cmd_idx < 4; cmd_idx++) {
             char *description;
             if (command_docs.descriptions[cmd_idx][0]) {
                 description = command_docs.descriptions[cmd_idx];
@@ -1006,18 +1835,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     printf("Searching for \x1b[1m");
     print_string_array(arguments, arg_len);
     printf("\x1b[0m\n");
-    /*
-    find_pkg Status Codes:
-    0: OK
-    2: Package not found
-    3: cURL init failed
-    4: cURL perform error 
-    5: HTTP error
-    6: AURWebRTC error
-    7: HTTP response content type was not 'application/json'
-    8: cJSON parsing error
-    9: JSON key error
-    */
+   
     response_body = find_pkg(arguments, arg_len, 0, &status);
     if (status) {
         cJSON_Delete(response_body);
@@ -1025,13 +1843,13 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     }
     if (cJSON_IsNull(response_body)) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
-        return 9;
+        return 6;
     }
     cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     if (!found_packages) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API results went missing.\n");
         cJSON_Delete(response_body);
-        return 9;
+        return 6;
     }
     
     const cJSON *package = NULL;
@@ -1214,14 +2032,14 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
             free(found_pkg_names);
             cJSON_Delete(response_body);
-            return 12;
+            return 6;
         }
         uid_t uid = getuid();
         struct passwd* pwd = getpwuid(uid);
 
         if (!pwd) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory");
-            return 10;
+            return 3;
         }
         uint32_t hdirc;
         for (hdirc = 0; pwd->pw_dir[hdirc] != '\0'; hdirc++);
@@ -1243,7 +2061,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         DIR *dir = opendir(pkg_base->valuestring);
         if (!dir) { 
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list directory\n"); 
-            return 13;
+            return 4;
         }
         struct dirent *dir_item;
         while ((dir_item = readdir(dir)) != NULL) {
@@ -1389,7 +2207,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 cJSON_Delete(package_data);
             }
             free(to_ignore);
-            return 9;
+            return 6;
         }
         found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     }
@@ -1400,13 +2218,13 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             cJSON_Delete(package_data);
         }
         free(to_ignore);
-        return 9;
+        return 6;
     }
     if (!cJSON_GetArraySize(found_packages)) {
         cJSON_Delete(response_body);
         fprintf(stderr, "\x1b[1;31mError\x1b[0m: No packages to install, exiting...\n");
         free(to_ignore);
-        return 2;
+        return 8;
     }
     cJSON *package = NULL;
     uint32_t found_pkg_arrc = cJSON_GetArraySize(found_packages);
@@ -1440,7 +2258,8 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
     }
     printf("Downloading packages...\n");
-    uint32_t download_and_extraction_failed = download_and_extract_pkgs(found_packages, found_pkg_arrc, keep_existing);
+    // uint32_t download_and_extraction_failed = download_and_extract_pkgs(found_packages, found_pkg_arrc, keep_existing);
+    uint32_t download_and_extraction_failed = git_download_pkgs(found_packages, found_pkg_arrc, keep_existing);
     if (download_and_extraction_failed) {
         free(found_pkg_names);
         cJSON_Delete(response_body);
@@ -1508,7 +2327,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 free(found_pkg_names);
                 cJSON_Delete(response_body);
                 free(to_ignore);
-                return 13;
+                return 4;
             }
             struct dirent *dir_item;
             while ((dir_item = readdir(dir)) != NULL) {
@@ -1616,7 +2435,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     cJSON_Delete(response_body);
                     free(fetched_bases);
                     free(to_ignore);
-                    return 14;
+                    return 4;
                 }
                 if (pid == 0) {
                     int fd = open(".SRCINFO", O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -1641,7 +2460,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     cJSON_Delete(response_body);
                     free(fetched_bases);
                     free(to_ignore);
-                    return 14;
+                    return 4;
                 }
                 int srcinfo_status = WEXITSTATUS(srcinfo_status_info);
                 if (srcinfo_status_info == -1) {
@@ -1650,7 +2469,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     cJSON_Delete(response_body);
                     free(fetched_bases);
                     free(to_ignore);
-                    return 15;
+                    return 4;
                     
                 }
                 if (WIFSIGNALED(srcinfo_status_info)) {
@@ -1669,7 +2488,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     cJSON_Delete(response_body);
                     free(fetched_bases);
                     free(to_ignore);
-                    return 31+srcinfo_status;
+                    return 32+srcinfo_status;
                 }
             }
 
@@ -1684,7 +2503,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 cJSON_Delete(response_body);
                 free(fetched_bases);
                 free(to_ignore);
-                return 14;
+                return 3;
             }
             size_t srcinfo_size = fread(srcinfo, sizeof(char), PATH_MAX, srcinfo_file);
 
@@ -1887,7 +2706,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             }
             free(found_pkg_names);
             cJSON_Delete(response_body);
-            return 9;
+            return 6;
         }
         cJSON *found_dependencies = cJSON_GetObjectItemCaseSensitive(depends_response_body, "results");
         if (!found_dependencies) {
@@ -1901,7 +2720,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             }
             free(found_pkg_names);
             cJSON_Delete(response_body);
-            return 9;
+            return 6;
         }
         cJSON *found_dependency = NULL;
         // printf("%d\n", cJSON_GetArraySize(found_dependencies));
@@ -1930,7 +2749,8 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         if (required_dependencies_count > 0) {
             printf("Downloading dependencies...\n");
-            download_and_extraction_failed = download_and_extract_pkgs(required_dependencies, required_dependencies_count, keep_existing);
+            // download_and_extraction_failed = download_and_extract_pkgs(required_dependencies, required_dependencies_count, keep_existing);
+            download_and_extraction_failed = git_download_pkgs(required_dependencies, required_dependencies_count, keep_existing);
             if (download_and_extraction_failed) {
                 if (base_dependencies != NULL) {
                     for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
@@ -1996,7 +2816,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 cJSON_Delete(required_dependencies);
                 cJSON_Delete(depends_response_body);
                 cJSON_Delete(response_body);
-                return 31+errno;
+                return 4;
             }
             if (pid == 0) {
                 char *argv[] = {
@@ -2024,7 +2844,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     free(dep_install_args[idx]);
                 }
                 free(dep_install_args);
-                return 31+errno;
+                return 4;
             }
             int makepkg_status = WEXITSTATUS(makepkg_status_info);
             if (makepkg_status || WIFSIGNALED(makepkg_status_info)) {
@@ -2039,7 +2859,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 }
                 if (makepkg_status) {
                     fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", makepkg_status);
-                    return_code = 31+ makepkg_status;
+                    return_code = 32+ makepkg_status;
                 }
                 if (base_dependencies != NULL) {
                     for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
@@ -2077,7 +2897,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 cJSON_Delete(required_dependencies);
                 cJSON_Delete(depends_response_body);
                 cJSON_Delete(response_body);
-                return 13;
+                return 4;
             }
             struct dirent *dir_item;
             while ((dir_item = readdir(dir)) != NULL) {
@@ -2119,7 +2939,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                                 free(dep_install_args[idx]);
                             }
                             free(dep_install_args);
-                            return 16;
+                            return 9;
                         }
                         dependency_install_count++;
                         uint32_t d_name_size;
@@ -2274,7 +3094,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 free(install_args[idx]);
             }
             free(install_args);
-            return 31+errno;
+            return 4;
         }
         if (pid == 0) {
             char *argv[] = {
@@ -2300,7 +3120,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 free(install_args[idx]);
             }
             free(install_args);
-            return 31+errno;
+            return 4;
         }
         int makepkg_status = WEXITSTATUS(makepkg_status_info);
         if (makepkg_status || WIFSIGNALED(makepkg_status_info)) {
@@ -2315,7 +3135,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             }
             if (makepkg_status) {
                 fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", makepkg_status);
-                return_code = 31+ makepkg_status;
+                return_code = 32+ makepkg_status;
             }
             if (base_dependencies != NULL) {
                 for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
@@ -2349,7 +3169,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 free(install_args[idx]);
             }
             free(install_args);
-            return 13;
+            return 4;
         }
         struct dirent *dir_item;
         while ((dir_item = readdir(dir)) != NULL) {
@@ -2389,7 +3209,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                             free(install_args[idx]);
                         }
                         free(install_args);
-                        return 16;
+                        return 9;
                     }
                     install_count++;
                     uint32_t d_name_size;
@@ -2522,7 +3342,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     alpm_handle_t * handle = alpm_initialize("/", DB_PATH, &err);
     if (handle == NULL) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: ALPM Error %d: %s\n", err, alpm_strerror(err));
-        return 18;
+        return 4;
     }
     alpm_db_t * local_db = alpm_get_localdb(handle);
     alpm_list_t * packages = alpm_db_get_pkgcache(local_db);
@@ -2534,7 +3354,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     if (sync_dir == NULL) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list db sync directory\n"); 
         alpm_release(handle);
-        return 13;
+        return 4;
     }
     struct dirent *dir_item;
     while ((dir_item = readdir(sync_dir)) != NULL) {
@@ -2558,7 +3378,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     if (sync_dbs == NULL) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Can't check for AUR packages due to missing or empty pacman database\n");
         alpm_release(handle);
-        return 19;
+        return 6;
     }
     uint32_t install_count = 0;
     char debug_match[] = "-debug";
@@ -2685,7 +3505,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
         free(installed_names);
         free(installed_versions);
-        return 9;
+        return 6;
     }
     cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     if (!found_packages) {
@@ -2697,7 +3517,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
         free(installed_names);
         free(installed_versions);
-        return 9;
+        return 6;
     }
     if (!cJSON_GetArraySize(found_packages)) {
         cJSON_Delete(response_body);
@@ -2708,7 +3528,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
         free(installed_names);
         free(installed_versions);
-        return 2;
+        return 8;
     }
     uint32_t found_pkg_arrc = cJSON_GetArraySize(found_packages);
     const cJSON *package;
@@ -3005,50 +3825,6 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     return return_code;
 }
 
-int command_u(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
-    cJSON_Delete(_);
-    (void)(options); 
-    (void)(arguments);
-    (void)(arg_len);
-    printf("cached upgrade command has been run\n");
-    return 0;
-}
-
-int command_v(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
-    cJSON_Delete(_);
-    (void)(options); 
-    (void)(arguments);
-    (void)(arg_len);
-    printf("v command has been run\n");
-    printf("This is the testing command\n");
-    char *unit_buffer = byte_units(-1);
-    printf("%s\n", unit_buffer);
-    free(unit_buffer);
-    // char *test1[3] = {"test1", "test2", "test3"};
-    // char *test2[1] = {"test3"};
-    // uint32_t test1c = 3;
-    // uint32_t test2c = 1;
-    // char **missing_pkgs = find_missing(test1, test1c, test2, test2c);
-    // uint32_t missing_size = test1c-test2c;
-    // printf("calculated size: %u\n", missing_size);
-    // for (uint32_t arri = 0; arri < missing_size; arri++) {
-    //     printf("%s\n", missing_pkgs[arri]);
-    // }
-    // free(missing_pkgs);
-    return 0;
-}
-
-int command_a(char *options, char *arguments[], int32_t arg_len, cJSON *package_data) {
-    if (cJSON_IsNull(package_data)) {
-        cJSON_Delete(package_data);
-    }
-    (void)(options); 
-    (void)(arguments);
-    (void)(arg_len);
-    printf("cached install command has been run\n");
-    return 0;
-}
-
 int main(int32_t argc, char *argv[]) {
     printf("%s %s\n%s %s\n", LONG_NAME, VERSION, COPYRIGHT, AUTHOR);
 
@@ -3104,10 +3880,10 @@ int main(int32_t argc, char *argv[]) {
                 break;
             }
         }
-        char name_lookup[] = { 'h', 'g', 'i', 'c', 'u', 'v', 'a' };
-        stdcall function_lookup[] = { command_h, command_g, command_i, command_c, command_u, command_v, command_a };
+        char name_lookup[] = { 'h', 'g', 'i', 'c'};
+        stdcall function_lookup[] = { command_h, command_g, command_i, command_c};
         uint8_t cmd_idx;
-        for (cmd_idx = 0; cmd_idx < 7; cmd_idx++) {
+        for (cmd_idx = 0; cmd_idx < 4; cmd_idx++) {
             if ((cmd_name | 32) == name_lookup[cmd_idx]) {
                 return_code = function_lookup[cmd_idx](cmd_opts, command_args, argc-2, cJSON_CreateNull());
                 free(command_args);

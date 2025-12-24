@@ -1,4 +1,4 @@
-LDFLAGS=-lcurl -lcjson -larchive -lalpm
+LDFLAGS=-lcurl -lcjson -larchive -lalpm -lgit2
 DEBUG_FLAGS=-g -fsanitize=address -fsanitize=undefined
 TEST_FLAGS=-c -o /dev/null $(LDFLAGS) -O -Wall -Wextra
 
