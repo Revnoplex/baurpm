@@ -724,13 +724,6 @@ char *download_pkg(char *url_path, uint8_t *status) {
                     return download_path;
                 }
                 fprintf(stderr, "\r\x1b[1;31mError\x1b[0m: Excpected a %s response, got a %s response instead.\n", type_match, content_type->value);
-                fprintf(
-                    stderr, 
-                    "\x1b[1;33mATTENTION\x1b[0m: Downloading snapshot urls using programs like this have recently been blocked by pow captchas.\n"
-                    "This aur helper is currently broken until git clone is implemented.\n"
-                    "In the meantime, please manually dowload the package from %s in your browser and save the file to %s\n", 
-                    url_buffer, downloads_dir_buffer
-                );
                 free(downloads_dir_buffer);
                 free(url_buffer);
                 *status = 0;
