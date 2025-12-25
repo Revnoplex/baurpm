@@ -31,12 +31,65 @@
 #define COPYRIGHT "Copyright (c) 2022-2025"
 #define AUR_BASE_URL "https://aur.archlinux.org"
 #define SUFFIX_MAX_SIZE sizeof("[ 100% ]")
+#define ARRAY_SIZE(x) (sizeof(x)/sizeof(*x))
 
 struct winsize term_size;
 struct timespec time_spec;
 uint64_t last_spec = 0;
 
-typedef int (*stdcall)(char *, char *[], int32_t, cJSON *);
+typedef int (*command_cb)(char *options, char *arguments[], int32_t arg_len, cJSON *package_data);
+int command_h(char *options, char *arguments[], int32_t arg_len, cJSON *package_data);
+int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *package_data);
+int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_data);
+int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *package_data);
+
+struct {
+    command_cb callback;
+    char name;
+    char *description;
+    char *usage;
+    char *options[8];
+} commands[] = {
+    {
+        command_h,
+        'H',
+        "Displays this message",
+        " [Command name]",
+        {}
+    },
+    {
+        command_g,
+        'G',
+        "Get info on an AUR package",
+        " [Package name]",
+        {}
+    },
+    {
+        command_i,
+        'I',
+        "Install an AUR package",
+        "[Options] [Package/s to install. Tip: Specify \"-\" before a package name to ignore it]",
+        {
+            "f: Ignore any missing packages",
+            "n: Skip reading PKGBUILD files",
+            "d: Keep existing cache directories when extracting",
+        }
+    },
+    {
+        command_c,
+        'C',
+        "Check and Upgrade installed AUR packages",
+        "[Options] [Package/s to ignore]",
+        {
+            "i, <packages>: Ignore upgrading packages specified",
+            "f: Ignore any missing packages",
+            "n: Skip reading PKGBUILD files",
+            "s: Skip running pacman -Syu",
+            "k: Upgrade archlinux-keyring first",
+            "d: Keep existing cache directories when extracting",
+        },
+    },
+};
 
 struct memory {
     /*
@@ -1431,7 +1484,7 @@ uint32_t git_pull_pkg(cJSON *pkg, int32_t keep_existing) {
         {GIT_MERGE_ANALYSIS_UP_TO_DATE, "Up to date"}
     };
 
-    for (uint64_t idx = 0; idx < sizeof(analysis_lookup) / sizeof(analysis_lookup[0]); idx++) {
+    for (uint64_t idx = 0; idx < ARRAY_SIZE(analysis_lookup); idx++) {
         if (analysis & analysis_lookup[idx].key) {
             printf("Git Analysis: %s\n", analysis_lookup[idx].value);
         }
@@ -1715,75 +1768,31 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_exis
     return 0;
 }
 
-struct commandDocs {
-    char names[4];
-    char *descriptions[4];
-    char *usages[4];
-    char *options[4][8];
-};
-
-
 int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
     cJSON_Delete(_);
     (void)(options);
-    struct commandDocs command_docs = {
-        { 'H', 'G', 'I', 'C'},
-        { 
-            "Displays this message", 
-            "Get info on an AUR package", 
-            "Install an AUR package without keeping the download", 
-            "Check for newer versions of installed packages", 
-        },
-        {
-            " [command-name]",
-            " [package]",
-            "[options] [package(s)]",
-            "[options] [arguments]",
-        },
-        {
-            { "" },
-            { "" },
-            {
-                "f: Ignore any missing packages",
-                "n: Skip reading PKGBUILD files",
-                "d: Keep existing cache directories when extracting",
-                ""
-            },
-            {
-                "i, <packages>: Ignore upgrading packages specified", 
-                "f: Ignore any missing packages", 
-                "n: Skip reading PKGBUILD files",
-                "s: Skip running pacman -Syu",
-                "k: Upgrade archlinux-keyring first",
-                "d: Keep existing cache directories when extracting",
-                ""
-            },
-        },
-    };
 
     if (arg_len) {
-        int32_t cmd_idx;
-        for (cmd_idx = 0; cmd_idx < 4; cmd_idx++) {
-            if ((arguments[0][0] & 95) == command_docs.names[cmd_idx]) {
+        for (uint64_t cmd_idx = 0; cmd_idx < ARRAY_SIZE(commands); cmd_idx++) {
+            if ((arguments[0][0] & 95) == commands[cmd_idx].name) {
                 char *description;
-                if (command_docs.descriptions[cmd_idx][0]) {
-                    description = command_docs.descriptions[cmd_idx];
+                if (commands[cmd_idx].description != NULL) {
+                    description = commands[cmd_idx].description;
                 } else {
                     description = "**No Description**";
                 }
-                printf("%c: %s\n", command_docs.names[cmd_idx], description);
-                if (command_docs.usages[cmd_idx][0]) {
+                printf("%c: %s\n", commands[cmd_idx].name, description);
+                if (commands[cmd_idx].usage != NULL) {
                     printf(
-                        "Usage:\n    baurpm -%c%s\n", command_docs.names[cmd_idx], command_docs.usages[cmd_idx]
+                        "Usage:\n    baurpm -%c%s\n", commands[cmd_idx].name, commands[cmd_idx].usage
                     );
                 } else {
                     printf("**No Usage**\n");
                 }
-                if (command_docs.options[cmd_idx][0][0]) {
+                if (commands[cmd_idx].options[0] != NULL && commands[cmd_idx].options[0] != NULL) {
                     printf("Options:\n");
-                    int32_t opt_idx;
-                    for (opt_idx = 0; command_docs.options[cmd_idx][opt_idx][0] != '\0'; opt_idx++) {
-                        printf("    %s\n", command_docs.options[cmd_idx][opt_idx]);
+                    for (int32_t opt_idx = 0; commands[cmd_idx].options[opt_idx] != NULL; opt_idx++) {
+                        printf("    %s\n", commands[cmd_idx].options[opt_idx]);
                     }
                 } else {
                     printf("**No Options**\n");
@@ -1797,15 +1806,14 @@ int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
     } else {
         printf("Usage: %s [command][options] [arguments]\n", SHORT_NAME);
         printf("Executable commands:\n");
-        int32_t cmd_idx;
-        for (cmd_idx = 0; cmd_idx < 4; cmd_idx++) {
+        for (uint64_t cmd_idx = 0; cmd_idx < ARRAY_SIZE(commands); cmd_idx++) {
             char *description;
-            if (command_docs.descriptions[cmd_idx][0]) {
-                description = command_docs.descriptions[cmd_idx];
+            if (commands[cmd_idx].description != NULL) {
+                description = commands[cmd_idx].description;
             } else {
                 description = "**No Description**";
             }
-            printf("-%c\t%s\n", command_docs.names[cmd_idx], description);
+            printf("-%c\t%s\n", commands[cmd_idx].name, description);
         }
         printf("use %s -H [command-name] for help with that command\n", SHORT_NAME);
     }
@@ -3872,12 +3880,9 @@ int main(int32_t argc, char *argv[]) {
                 break;
             }
         }
-        char name_lookup[] = { 'h', 'g', 'i', 'c'};
-        stdcall function_lookup[] = { command_h, command_g, command_i, command_c};
-        uint8_t cmd_idx;
-        for (cmd_idx = 0; cmd_idx < 4; cmd_idx++) {
-            if ((cmd_name | 32) == name_lookup[cmd_idx]) {
-                return_code = function_lookup[cmd_idx](cmd_opts, command_args, argc-2, cJSON_CreateNull());
+        for (uint64_t cmd_idx = 0; cmd_idx < ARRAY_SIZE(commands); cmd_idx++) {
+            if ((cmd_name & 95) == commands[cmd_idx].name) {
+                return_code = commands[cmd_idx].callback(cmd_opts, command_args, argc-2, cJSON_CreateNull());
                 free(command_args);
                 break;
             } else if (cmd_idx == 6) {
