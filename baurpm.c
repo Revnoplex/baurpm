@@ -1420,12 +1420,10 @@ uint32_t git_pull_pkg(cJSON *pkg, int32_t keep_existing) {
         goto cleanup;
     }
 
-    typedef struct {
+    struct {
         int key;
         const char *value;
-    } AnalysisLookup;
-
-    AnalysisLookup analysis_lookup[] = {
+    } analysis_lookup[] = {
         {GIT_MERGE_ANALYSIS_FASTFORWARD, "Fast Forward"},
         {GIT_MERGE_ANALYSIS_NONE, "None"},
         {GIT_MERGE_ANALYSIS_NORMAL, "Normal"},
@@ -1723,6 +1721,7 @@ struct commandDocs {
     char *usages[4];
     char *options[4][8];
 };
+
 
 int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
     cJSON_Delete(_);
