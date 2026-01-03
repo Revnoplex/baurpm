@@ -28,10 +28,11 @@
 #define VERSION "0.1.0a"
 #define AUTHOR "Revnoplex"
 #define LICENSE "MIT"
-#define COPYRIGHT "Copyright (c) 2022-2025"
+#define COPYRIGHT "Copyright (c) 2022-2026"
 #define AUR_BASE_URL "https://aur.archlinux.org"
 #define SUFFIX_MAX_SIZE sizeof("[ 100% ]")
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(*x))
+#define PACMAN_DB_PATH "/var/lib/pacman"
 
 struct winsize term_size;
 struct timespec time_spec;
@@ -90,6 +91,11 @@ struct {
         },
     },
 };
+
+typedef struct {
+    char *name;
+    char *version;
+} InstalledPkgInfo;
 
 struct memory {
     /*
@@ -2396,7 +2402,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     );
     printf(
         "WARNING: this version doesn't check for dependency version conflicts. "
-        "Please make sure all your packages are up to date or face the rick of a partial upgrade\n"
+        "Please make sure all your packages are up to date or face the risk of a partial upgrade\n"
     );
     char **base_dependencies = NULL;
     uint32_t base_dependencies_amount = 0;
@@ -3336,10 +3342,9 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
     }
     // todo: add proper options for this command.
-    #define DB_PATH "/var/lib/pacman"
     printf("Checking for newer versions of AUR packages...\n");
     alpm_errno_t err;
-    alpm_handle_t * handle = alpm_initialize("/", DB_PATH, &err);
+    alpm_handle_t * handle = alpm_initialize("/", PACMAN_DB_PATH, &err);
     if (handle == NULL) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: ALPM Error %d: %s\n", err, alpm_strerror(err));
         return 4;
@@ -3347,8 +3352,8 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     alpm_db_t * local_db = alpm_get_localdb(handle);
     alpm_list_t * packages = alpm_db_get_pkgcache(local_db);
     char sync_dirname[] = "sync";
-    char *sync_dir_path = malloc(sizeof(DB_PATH)+sizeof(sync_dirname));
-    snprintf(sync_dir_path, sizeof(DB_PATH)+sizeof(sync_dirname), "%s/%s", DB_PATH, sync_dirname);
+    char *sync_dir_path = malloc(sizeof(PACMAN_DB_PATH)+sizeof(sync_dirname));
+    snprintf(sync_dir_path, sizeof(PACMAN_DB_PATH)+sizeof(sync_dirname), "%s/%s", PACMAN_DB_PATH, sync_dirname);
     DIR *sync_dir = opendir(sync_dir_path);
     free(sync_dir_path);
     if (sync_dir == NULL) {
@@ -3417,8 +3422,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         install_count++;
     }
     printf("Checking %u AUR packages...\n", install_count);
-    char **installed_names = malloc(install_count * sizeof(void *));
-    char **installed_versions = malloc(install_count * sizeof(void *));
+    InstalledPkgInfo **installed_pkgs = malloc(install_count * sizeof(InstalledPkgInfo));
     uint32_t install_idx = 0;
     skip = 0;
     for(alpm_list_t *i = packages; i; i = alpm_list_next(i)) {
@@ -3458,11 +3462,12 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
         
         char *to_copy_name = malloc(pkgname_len+1);
+        installed_pkgs[install_idx] = malloc(sizeof(InstalledPkgInfo));
         snprintf(to_copy_name, pkgname_len+1, "%s", pkgname);
-        installed_names[install_idx] = to_copy_name;
+        installed_pkgs[install_idx]->name = to_copy_name;
         char *to_copy_version = malloc(pkgver_len+1);
         snprintf(to_copy_version, pkgver_len+1, "%s", pkgver);
-        installed_versions[install_idx] = to_copy_version;
+        installed_pkgs[install_idx]->version = to_copy_version;
         install_idx++;
     }
     alpm_release(handle);
@@ -3479,7 +3484,12 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     8: cJSON parsing error
     9: JSON key error
     */
+    char **installed_names = malloc(install_count * sizeof(void *));
+    for (uint32_t i = 0; i < install_idx; i++) {
+        installed_names[i] = installed_pkgs[i]->name;
+    }
     cJSON *response_body = find_pkg(installed_names, install_count, skip_missing, &status);
+    free(installed_names);
     if (status) {
         cJSON_Delete(response_body);
         // written differently as a hacky way to supress false gcc warning.
@@ -3489,22 +3499,22 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             Putting any form of this check anywhere outside the for loop triggers the warning
             */
             if (idx < install_count) {
-                free(installed_names[idx]);
-                free(installed_versions[idx]);
+                free(installed_pkgs[idx]->name);
+                free(installed_pkgs[idx]->version);
+                free(installed_pkgs[idx]);
             }
         }
-        free(installed_names);
-        free(installed_versions);
+        free(installed_pkgs);
         return status;
     }
     if (cJSON_IsNull(response_body)) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
         for (uint32_t idx = 0; idx < install_count; idx++) {
-            free(installed_names[idx]);
-            free(installed_versions[idx]);
+            free(installed_pkgs[idx]->name);
+            free(installed_pkgs[idx]->version);
+            free(installed_pkgs[idx]);
         }
-        free(installed_names);
-        free(installed_versions);
+        free(installed_pkgs);
         return 6;
     }
     cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
@@ -3512,28 +3522,28 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         cJSON_Delete(response_body);
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API results went missing.\n");
         for (uint32_t idx = 0; idx < install_count; idx++) {
-            free(installed_names[idx]);
-            free(installed_versions[idx]);
+            free(installed_pkgs[idx]->name);
+            free(installed_pkgs[idx]->version);
+            free(installed_pkgs[idx]);
         }
-        free(installed_names);
-        free(installed_versions);
+        free(installed_pkgs);
         return 6;
     }
     if (!cJSON_GetArraySize(found_packages)) {
         cJSON_Delete(response_body);
         fprintf(stderr, "\x1b[1;31mError\x1b[0m: No packages to install, exiting...\n");
         for (uint32_t idx = 0; idx < install_count; idx++) {
-            free(installed_names[idx]);
-            free(installed_versions[idx]);
+            free(installed_pkgs[idx]->name);
+            free(installed_pkgs[idx]->version);
+            free(installed_pkgs[idx]);
         }
-        free(installed_names);
-        free(installed_versions);
+        free(installed_pkgs);
         return 8;
     }
     uint32_t found_pkg_arrc = cJSON_GetArraySize(found_packages);
     const cJSON *package;
     uint32_t pkg_num = 0;
-    // Note: this will share addresses from installed_names so no need to free() each element or will result in double free.
+    // Note: this will share addresses from installed_pkgs so no need to free() each element or will result in double free.
     char **needs_update = malloc(found_pkg_arrc * sizeof(void *));
     cJSON *package_data = cJSON_CreateArray();
     uint32_t outdated_count = 0;
@@ -3543,7 +3553,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         if (name && name->valuestring && version && cJSON_IsString(version)) {
             uint32_t outdated = 1;
             uint32_t missing = 1;
-            for (uint32_t idx = 0; installed_names[pkg_num][idx] == name->valuestring[idx]; idx++) {
+            for (uint32_t idx = 0; installed_pkgs[pkg_num]->name[idx] == name->valuestring[idx]; idx++) {
                 if (name->valuestring[idx] == '\0') {
                     missing = 0;
                     break;
@@ -3552,7 +3562,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             if (missing) {
                 pkg_num++;
             }
-            for (uint32_t idx = 0; installed_versions[pkg_num][idx] == version->valuestring[idx]; idx++) {
+            for (uint32_t idx = 0; installed_pkgs[pkg_num]->version[idx] == version->valuestring[idx]; idx++) {
                 if (version->valuestring[idx] == '\0') {
                     outdated = 0;
                     break;
@@ -3562,8 +3572,8 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 int32_t ignore_match = 0;
                 if (ignoring_packages) {
                     for (int32_t idx = 0; idx < arg_len; idx++) {
-                        for (uint32_t str_idx = 0; installed_names[pkg_num][str_idx] == arguments[idx][str_idx]; str_idx++) {
-                            if (installed_names[pkg_num][str_idx] == '\0') {
+                        for (uint32_t str_idx = 0; installed_pkgs[pkg_num]->name[str_idx] == arguments[idx][str_idx]; str_idx++) {
+                            if (installed_pkgs[pkg_num]->name[str_idx] == '\0') {
                                 ignore_match = 1;
                                 break;
                             }
@@ -3571,10 +3581,10 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                     }
                 }
                 if (ignore_match) {
-                    printf("Skipping %s\n", installed_names[pkg_num]);
+                    printf("Skipping %s\n", installed_pkgs[pkg_num]->name);
                 } else {
-                    // Note: shares addresses from installed_names
-                    needs_update[outdated_count] = installed_names[pkg_num];
+                    // Note: shares addresses from installed_pkgs
+                    needs_update[outdated_count] = installed_pkgs[pkg_num]->name;
                     cJSON_AddItemReferenceToArray(package_data, (cJSON *) package);
                     outdated_count++;
                 }
@@ -3587,14 +3597,13 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         // free everything
         cJSON_Delete(response_body);
         for (uint32_t idx = 0; idx < install_count; idx++) {
-            // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
-            free(installed_names[idx]);
-            free(installed_versions[idx]);
+            free(installed_pkgs[idx]->name);
+            free(installed_pkgs[idx]->version);
+            free(installed_pkgs[idx]);
         }
         cJSON_Delete(package_data);
         free(needs_update);
-        free(installed_names);
-        free(installed_versions);
+        free(installed_pkgs);
         return 0;
     }
     printf("%u AUR packages can be upgraded:\n    ", outdated_count);
@@ -3612,14 +3621,13 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         // free everything
         cJSON_Delete(response_body);
         for (uint32_t idx = 0; idx < install_count; idx++) {
-            // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
-            free(installed_names[idx]);
-            free(installed_versions[idx]);
+            free(installed_pkgs[idx]->name);
+            free(installed_pkgs[idx]->version);
+            free(installed_pkgs[idx]);
         }
         cJSON_Delete(package_data);
         free(needs_update);
-        free(installed_names);
-        free(installed_versions);
+        free(installed_pkgs);
         return 0;
     }
     printf("It is recommended to run pacman -Syu before upgrading these packages\n");
@@ -3636,13 +3644,13 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
                 cJSON_Delete(response_body);
                 for (uint32_t idx = 0; idx < install_count; idx++) {
-                    free(installed_names[idx]);
-                    free(installed_versions[idx]);
+                    free(installed_pkgs[idx]->name);
+                    free(installed_pkgs[idx]->version);
+                    free(installed_pkgs[idx]);
                 }
                 cJSON_Delete(package_data);
                 free(needs_update);
-                free(installed_names);
-                free(installed_versions);
+                free(installed_pkgs);
                 return 64+errno;
             }
             if (pid == 0) {
@@ -3658,13 +3666,13 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for pacman: %s\n", strerror(errno));
                 cJSON_Delete(response_body);
                 for (uint32_t idx = 0; idx < install_count; idx++) {
-                    free(installed_names[idx]);
-                    free(installed_versions[idx]);
+                    free(installed_pkgs[idx]->name);
+                    free(installed_pkgs[idx]->version);
+                    free(installed_pkgs[idx]);
                 }
                 cJSON_Delete(package_data);
                 free(needs_update);
-                free(installed_names);
-                free(installed_versions);
+                free(installed_pkgs);
                 return 64+errno;
             }
             int keyring_failed = WEXITSTATUS(keyring_status);
@@ -3678,27 +3686,26 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 }
                 cJSON_Delete(response_body);
                 for (uint32_t idx = 0; idx < install_count; idx++) {
-                    // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
-                    free(installed_names[idx]);
-                    free(installed_versions[idx]);
+                    free(installed_pkgs[idx]->name);
+                    free(installed_pkgs[idx]->version);
+                    free(installed_pkgs[idx]);
                 }
                 cJSON_Delete(package_data);
                 free(needs_update);
-                free(installed_names);
-                free(installed_versions);
+                free(installed_pkgs);
                 return 128+WTERMSIG(keyring_status);
             }
             if (keyring_failed) {
                 fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Pacman failed with exit code %d\n", keyring_failed);
                 cJSON_Delete(response_body);
                 for (uint32_t idx = 0; idx < install_count; idx++) {
-                    free(installed_names[idx]);
-                    free(installed_versions[idx]);
+                    free(installed_pkgs[idx]->name);
+                    free(installed_pkgs[idx]->version);
+                    free(installed_pkgs[idx]);
                 }
                 cJSON_Delete(package_data);
                 free(needs_update);
-                free(installed_names);
-                free(installed_versions);
+                free(installed_pkgs);
                 return 64;
             }
             printf("Successfully upgraded archlinux-keyring\n");
@@ -3714,12 +3721,12 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             for (uint32_t idx = 0; idx < install_count; idx++) {
-                free(installed_names[idx]);
-                free(installed_versions[idx]);
-            }
+                    free(installed_pkgs[idx]->name);
+                    free(installed_pkgs[idx]->version);
+                    free(installed_pkgs[idx]);
+                }
             free(needs_update);
-            free(installed_names);
-            free(installed_versions);
+            free(installed_pkgs);
             return 64+errno;
         }
         if (pid == 0) {
@@ -3736,12 +3743,12 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             for (uint32_t idx = 0; idx < install_count; idx++) {
-                free(installed_names[idx]);
-                free(installed_versions[idx]);
-            }
+                    free(installed_pkgs[idx]->name);
+                    free(installed_pkgs[idx]->version);
+                    free(installed_pkgs[idx]);
+                }
             free(needs_update);
-            free(installed_names);
-            free(installed_versions);
+            free(installed_pkgs);
             return 64+errno;
         }
         int pacman_failed = WEXITSTATUS(pacman_status);
@@ -3754,14 +3761,13 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                     WTERMSIG(pacman_status), strsignal(WTERMSIG(pacman_status)));
             }cJSON_Delete(response_body);
             for (uint32_t idx = 0; idx < install_count; idx++) {
-                // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
-                free(installed_names[idx]);
-                free(installed_versions[idx]);
-            }
+                    free(installed_pkgs[idx]->name);
+                    free(installed_pkgs[idx]->version);
+                    free(installed_pkgs[idx]);
+                }
             cJSON_Delete(package_data);
             free(needs_update);
-            free(installed_names);
-            free(installed_versions);
+            free(installed_pkgs);
             return 128+WTERMSIG(pacman_status);
         }
         if (pacman_failed) {
@@ -3769,13 +3775,12 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             for (uint32_t idx = 0; idx < install_count; idx++) {
-                // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
-                free(installed_names[idx]);
-                free(installed_versions[idx]);
-            }
+                    free(installed_pkgs[idx]->name);
+                    free(installed_pkgs[idx]->version);
+                    free(installed_pkgs[idx]);
+                }
             free(needs_update);
-            free(installed_names);
-            free(installed_versions);
+            free(installed_pkgs);
             return 64;
         }
     }
@@ -3814,13 +3819,12 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     cJSON_Delete(package_data);
     cJSON_Delete(response_body);
     for (uint32_t idx = 0; idx < install_count; idx++) {
-        // printf("%d %s %s\n", idx, installed_names[idx], installed_versions[idx]);
-        free(installed_names[idx]);
-        free(installed_versions[idx]);
+        free(installed_pkgs[idx]->name);
+        free(installed_pkgs[idx]->version);
+        free(installed_pkgs[idx]);
     }
     free(needs_update);
-    free(installed_names);
-    free(installed_versions);
+    free(installed_pkgs);
     // printf("%u\n", install_count);
     return return_code;
 }
