@@ -2923,12 +2923,23 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             cJSON_Delete(response_body);
             return 6;
         }
+        alpm_errno_t err;
+        alpm_handle_t * handle = alpm_initialize("/", PACMAN_DB_PATH, &err);
+        if (handle == NULL) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: ALPM Error %d: %s\n", err, alpm_strerror(err));
+            return 4;
+        }
+        alpm_db_t * local_db = alpm_get_localdb(handle);
+        // alpm_list_t * packages = alpm_db_get_pkgcache(local_db);
+        
         cJSON *found_dependency = NULL;
         // printf("%d\n", cJSON_GetArraySize(found_dependencies));
         cJSON *required_dependencies = cJSON_CreateArray();
         uint32_t required_dependencies_count = 0;
         cJSON_ArrayForEach(found_dependency, found_dependencies) {
             cJSON *dep_base_id = cJSON_GetObjectItemCaseSensitive(found_dependency, "PackageBaseID");
+            cJSON *pkg_name = cJSON_GetObjectItemCaseSensitive(found_dependency, "Name");
+            cJSON *pkg_version = cJSON_GetObjectItemCaseSensitive(found_dependency, "Version");
             if ((!dep_base_id) || (!cJSON_IsNumber(dep_base_id))) {
                 continue;
             }
@@ -2946,9 +2957,24 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             if (base_match) {
                 continue;
             }
+            uint32_t up_to_date = 0;
+            alpm_pkg_t *installed_pkg = alpm_db_get_pkg(local_db, pkg_name->valuestring);
+            if (installed_pkg) {
+                const char *installed_pkg_version = alpm_pkg_get_version(installed_pkg);
+                for (uint32_t idx = 0; pkg_version->valuestring[idx] == installed_pkg_version[idx]; idx++) {
+                    if (pkg_version->valuestring[idx] == '\0') {
+                        up_to_date = 1;
+                        break;
+                    }
+                }
+            }
+            if (up_to_date) {
+                continue;
+            }
             required_dependencies_count++;
             cJSON_AddItemReferenceToArray(required_dependencies, found_dependency);
         }
+        alpm_release(handle);
         if (required_dependencies_count > 0) {
             printf("Downloading dependencies...\n");
             // download_and_extraction_failed = download_and_extract_pkgs(required_dependencies, required_dependencies_count, keep_existing);
