@@ -277,7 +277,13 @@ void installed_pkg_info_array_free(InstalledPkgInfo **pointer, uint32_t size) {
     );
 }
 
-
+enum pkg_dir_status {
+    NOT_PATH,
+    NOT_DIRECTORY,
+    NOT_GIT_REPO,
+    GIT_REPO,
+    CHECK_ERROR,
+};
 
 struct memory {
     /*
@@ -315,7 +321,7 @@ typedef struct progress_data {
     */
    
 
-int rmrf(const char *path, const struct stat *stat_info, int typeflag, struct FTW *ftwbuf) {
+int nftw_cb(const char *path, const struct stat *stat_info, int typeflag, struct FTW *ftwbuf) {
     (void)(stat_info);
     (void)(typeflag);
     (void)(ftwbuf);
@@ -324,6 +330,32 @@ int rmrf(const char *path, const struct stat *stat_info, int typeflag, struct FT
         fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to remove %s: %s\n", path, strerror(errno));
     }
     return rm_status;
+}
+
+int rmrf(const char *path) {
+    return nftw(path, nftw_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
+
+enum pkg_dir_status check_pkg_dir_status(const char *path) {   
+    struct stat stat_info;
+    if (stat(path, &stat_info)) {
+        return NOT_PATH;
+    }
+
+    if (!S_ISDIR(stat_info.st_mode)) {
+        return NOT_DIRECTORY;
+    }
+
+    if (chdir(path) < 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to change directory to %s: %s\n", path, strerror(errno));
+        return CHECK_ERROR;
+    }
+
+    int git_dir_missing = stat(".git", &stat_info) || !S_ISDIR(stat_info.st_mode);
+
+    chdir("..");
+
+    return git_dir_missing ? NOT_GIT_REPO : GIT_REPO;
 }
 
 static size_t cb(char *data, size_t size, size_t nmemb, void *clientp) {
@@ -439,8 +471,7 @@ static int extract(const char *filename, int32_t keep_existing) {
             int stat_status = stat(entry_pathname, &stat_info);
             if (stat_status == 0 && S_ISDIR(stat_info.st_mode)) {
                 printf("Directory %s exists. Deleting to prevent issues with PKGBUILD scripts...\n", entry_pathname);
-                int rmrf_successful = nftw(entry_pathname, rmrf, 64, FTW_DEPTH | FTW_PHYS);
-                if(rmrf_successful) {
+                if(rmrf(entry_pathname)) {
                     fprintf(stderr, "\x1b[1;31mError\x1b[0m: Removing directory %s failed: %s\n", entry_pathname, strerror(errno));
                 }
             }
@@ -1335,7 +1366,7 @@ int status_cb(const char *path, unsigned int status_flags, void *payload) {
     (void)payload;
     if (status_flags == GIT_STATUS_WT_NEW || status_flags == GIT_STATUS_IGNORED) {
         printf("Removing %s\n", path);
-        if(nftw(path, rmrf, 64, FTW_DEPTH | FTW_PHYS)) {
+        if(rmrf(path)) {
             fprintf(stderr, "\x1b[1;31mError\x1b[0m: Removing path %s failed: %s\n", path, strerror(errno));
             return 1;
         }
@@ -1803,13 +1834,28 @@ uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
         }
         free(cache_dir_buffer);
         // extract package
-        struct stat stat_info;
-        int stat_status = stat(pkg_base->valuestring, &stat_info);
-        if (stat_status == 0 && S_ISDIR(stat_info.st_mode)) {
+        enum pkg_dir_status dir_status = check_pkg_dir_status(pkg_base->valuestring);
+        switch (dir_status) {
+        case GIT_REPO:
             return_code = git_pull_pkg(pkg_base->valuestring, keep_existing);
-        } else {
+            break;
+
+        case NOT_PATH:
+        case NOT_DIRECTORY:
+        case NOT_GIT_REPO:
+            if (dir_status != NOT_PATH && rmrf(pkg_base->valuestring)) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Removing path %s failed: %s\n", pkg_base->valuestring, strerror(errno));
+                return_code = 3;
+                break;
+            }
             return_code = git_clone_pkg(pkg_base->valuestring);
+            break;
+
+        case CHECK_ERROR:
+            return_code = 3;
+            break;
         }
+
         if (return_code) {
             break;
         }
