@@ -36,7 +36,8 @@
 
 struct winsize term_size;
 struct timespec time_spec;
-uint64_t last_spec = 0;
+time_t last_spec = 0;
+time_t duration_elapsed;
 
 typedef int (*command_cb)(char *options, char *arguments[], int32_t arg_len, cJSON *package_data);
 int command_h(char *options, char *arguments[], int32_t arg_len, cJSON *package_data);
@@ -1116,8 +1117,8 @@ static int print_progress(const progress_data *pd) {
         fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't get timestamp: errno %d: %s\n", errno, strerror(errno));
         return -1;
     }
-    uint64_t duration_elapsed = time_spec.tv_sec * 1000000 + time_spec.tv_nsec / 1000 - last_spec;
-    last_spec = last_spec ? last_spec : (uint64_t) time_spec.tv_sec * 1000000 + time_spec.tv_nsec / 1000;
+    duration_elapsed = time_spec.tv_sec * 1000000 + time_spec.tv_nsec / 1000 - last_spec;
+    last_spec = last_spec ? last_spec : (time_t) time_spec.tv_sec * 1000000 + time_spec.tv_nsec / 1000;
     double seconds_elasped = (double) duration_elapsed / 1000000;
     uint64_t download_rate = pd->fetch_progress.received_bytes / seconds_elasped;
 
@@ -2353,6 +2354,15 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     uint8_t skip_missing = 0;
     uint8_t skip_review = 0;
     int32_t keep_existing = 0;
+    time_t timestamp_1;
+    time_t timestamp_2;
+    time_t timestamp_3;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+        return 8;
+    }
+    timestamp_1 = time_spec.tv_sec;
     for (uint32_t idx = 0; options[idx] != '\0'; idx++) {
         switch (options[idx]) {
             case 'f':
@@ -3047,6 +3057,11 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         uint32_t non_dyn_dep_install_args = dep_install_args_len;
         cJSON *package = NULL;
+        if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+            return 8;
+        }
+        timestamp_2 = time_spec.tv_sec;
         cJSON_ArrayForEach(package, required_dependencies) {
             cJSON *pkg_base = cJSON_GetObjectItemCaseSensitive(package, "PackageBase");
             uint8_t base_match = 0;
@@ -3068,6 +3083,11 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             } else {
                 printf("Making Dependency \x1b[1m%s\x1b[0m\n", pkg_base->valuestring);
             }
+            if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+                return 8;
+            }
+            timestamp_3 = time_spec.tv_sec;
             chdir(pkg_base->valuestring);
             pid_t pid = fork();
             if (pid < 0) {
@@ -3206,8 +3226,23 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             }
             closedir(dir);
             chdir("..");
+            if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+                return 8;
+            }
+            duration_elapsed = time_spec.tv_sec-timestamp_3;
+            printf("Finished making %s in %02lu:%02lu:%02lu\n", pkg_base->valuestring, duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+        }
+        if (required_dependencies_count > 0) {
+            if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+                return 8;
+            }
+            duration_elapsed = time_spec.tv_sec-timestamp_2;
+            printf("Finished making dependencies in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
         }
         dep_install_args[dep_install_args_len] = NULL;
+        
         
         if (dep_install_args_len-non_dyn_dep_install_args) {
             printf("Installing \x1b[1m%d\x1b[0m dependencies...\n", dependency_install_count);
@@ -3295,6 +3330,11 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         install_args_len++;
     }
     uint32_t non_dyn_install_args = install_args_len;
+    if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+        return 8;
+    }
+    timestamp_2 = time_spec.tv_sec;
     for (int pkg_idx = 0; pkg_idx < pkgs->size; pkg_idx++) {
         AURPkgInfo *pkg_info = pkgs->items[pkg_idx];
         if (pkg_info->base == NULL || !(pkg_info->base_id)) {
@@ -3326,6 +3366,11 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         } else {
             printf("Making Package \x1b[1m%s\x1b[0m\n", pkg_info->base);
         }
+        if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+            return 8;
+        }
+        timestamp_3 = time_spec.tv_sec;
         chdir(pkg_info->base);
         pid_t pid = fork();
         if (pid < 0) {
@@ -3454,7 +3499,19 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         closedir(dir);
         chdir("..");
+        if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+            return 8;
+        }
+        duration_elapsed = time_spec.tv_sec-timestamp_3;
+        printf("Finished making %s in %02lu:%02lu:%02lu\n", pkg_info->base, duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
     }
+    if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+        return 8;
+    }
+    duration_elapsed = time_spec.tv_sec-timestamp_2;
+    printf("Finished making packages in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
     aur_pkg_info_array_free(pkgs);
     install_args[install_args_len] = NULL;
     
@@ -3519,7 +3576,14 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         free(install_args);
     }
     free(built_bases);
-    printf("Installation Completed\n");
+
+    if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+        return 8;
+    }
+    duration_elapsed = time_spec.tv_sec-timestamp_1;
+    printf("Installation Completed in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+
     aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
     free(found_pkg_names);
     cJSON_Delete(response_body);
@@ -3531,10 +3595,17 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     cJSON_Delete(_);
     (void)(arguments);
     (void)(arg_len);
+    time_t primary_timestamp;
+    time_t secondary_timestamp;
     uint8_t skip_missing = 0;
     uint8_t skip_upgrade = 0;
     uint8_t upgrade_keyring = 0;
     int32_t ignoring_packages = 0;
+    if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+        return 8;
+    }
+    primary_timestamp = time_spec.tv_sec;
     for (uint32_t idx = 0; options[idx] != '\0'; idx++) {
         switch (options[idx]) {
             case 'f':
@@ -3808,6 +3879,11 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     }
     printf("It is recommended to run pacman -Syu before upgrading these packages\n");
     if (!skip_upgrade) {
+        if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+            return 8;
+        }
+        secondary_timestamp = time_spec.tv_sec;
         printf("Note: pass the s argument to skip running running pacman -Syu\n");
         printf(
             "Note: If you run into package signature errors, " 
@@ -3919,6 +3995,12 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             free(needs_update);
             return 64;
         }
+        if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+            return 8;
+        }
+        duration_elapsed = time_spec.tv_sec-secondary_timestamp;
+        printf("Completed pacman -Syu in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
     }
     char **arg_list = NULL;
     int32_t arg_list_len;
@@ -3946,6 +4028,14 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         arg_list = needs_update;
     }
     uint8_t return_code = command_i(options, arg_list, arg_list_len, package_data);
+
+    if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
+        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+        return 8;
+    }
+    duration_elapsed = time_spec.tv_sec-primary_timestamp;
+    printf("Full Upgrade Completed in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+
     if (ignoring_packages) {
         aop_full_free((void **)arg_list, arg_list_len, free, free);
     }
