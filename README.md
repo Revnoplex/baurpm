@@ -18,11 +18,8 @@ The main reason is so I can easily install or update it on any of my archlinux i
 - python 3.8 or later
 - sudo
 
-## Dependencies for c version:
-- curl
-- cjson
-- libarchive
-- sudo
+## Dependencies for C version:
+See [pkglist.txt](pkglist.txt)
 
 This is an AUR Helper so this will only run on arch based systems.
 
@@ -39,7 +36,12 @@ autoreconf --install
 ./configure
 make
 ```
-This should generate `baurpm`
+This should generate the execuable `baurpm`. You can then install this executable to PATH with
+```sh
+sudo make install
+```
+
+### Debug Build
 
 You can build debug binaries with
 ```sh
@@ -47,37 +49,20 @@ make -B baurpm_debug -f Makefile.2
 ```
 This creates `build/baurpm-debug`
 
-You can install to PATH with
-```sh
-sudo make install
-```
-
-## Building The C Version (Old Method)
-
-Running make by itself should generate `build/baurpm`
-```sh
-make -f Makefile.2
-```
-
-You can install with
-```sh
-sudo make install -f Makefile.2
-```
-
 ## Usage
 Usage Layout is
 ```sh
-./baurpm.py [command] [options]
+baurpm [command] [options]
 ```
 To install a Package
 ```sh
-./baurpm.py -I package-name
+baurpm -I package-name
 ```
 To upgrade installed aur packages
 ```sh
-./baurpm.py -C
+baurpm -C
 ```
 
-Use `./baurpm` to use the c version
+Use `./baurpm.py` to use the python version
 
 See `./baurpm.py -H` for more commands and usage
