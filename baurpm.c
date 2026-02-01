@@ -74,7 +74,7 @@ struct {
         {
             "f: Ignore any missing packages",
             "n: Skip reading PKGBUILD files",
-            "d: Keep existing cache directories when extracting",
+            "d: Keep existing cache directories when downloading",
         }
     },
     {
@@ -88,7 +88,7 @@ struct {
             "n: Skip reading PKGBUILD files",
             "s: Skip running pacman -Syu",
             "k: Upgrade archlinux-keyring first",
-            "d: Keep existing cache directories when extracting",
+            "d: Keep existing cache directories when downloading",
         },
     },
 };
