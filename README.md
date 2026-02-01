@@ -64,3 +64,16 @@ baurpm -C
 Use `./baurpm.py` to use the python version
 
 Run `baurpm -H` for a list of more commands and usage
+
+## Updating
+This program is not in the AUR at this time, so you cannot update this program using itself.
+
+Instead to update, run
+```
+git pull
+autoreconf --install
+./configure
+make
+sudo make install
+```
+to install the latest version
