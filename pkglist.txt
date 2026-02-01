@@ -3,3 +3,4 @@ cjson
 libarchive
 sudo
 libgit2
+pacman
