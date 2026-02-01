@@ -50,7 +50,7 @@ This creates `build/baurpm-debug`
 ## Usage
 Usage Layout is
 ```sh
-baurpm [command] [options]
+baurpm [command][options] [arguments]
 ```
 To install a Package
 ```sh
@@ -63,4 +63,4 @@ baurpm -C
 
 Use `./baurpm.py` to use the python version
 
-See `./baurpm.py -H` for more commands and usage
+Run `baurpm -H` for a list of more commands and usage
