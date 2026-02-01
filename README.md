@@ -21,8 +21,6 @@ The main reason is so I can easily install or update it on any of my archlinux i
 ## Dependencies for C version:
 See [pkglist.txt](pkglist.txt)
 
-This is an AUR Helper so this will only run on arch based systems.
-
 ## Building The C Version.
 
 Make sure all dependencies are installed
