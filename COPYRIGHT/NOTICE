@@ -9,5 +9,3 @@ the extract (static void extract) and copy_data (static int copy_data) functions
 See LIBARCHIVE file for the invididual notice.
 
 The remmaining code is original and is licensed under the MIT license (See LICENSE.md)
-
-
