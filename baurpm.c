@@ -22,6 +22,7 @@
 #include <ftw.h>
 #include <git2.h>
 #include <sys/ioctl.h>
+#include <gpgme.h>
 
 #define LONG_NAME "Basic Arch User Repository (AUR) Package Manager"
 #define SHORT_NAME "baurpm"
@@ -203,26 +204,29 @@ AURPkgInfo *new_aur_pkg_info(cJSON *pkg_data) {
     return pkg_info;
 }
 
-AURPkgInfoArray *new_aur_pkg_info_array(cJSON *pkg_list) {
-    cJSON *pkg_data;
+AURPkgInfoArray *new_empty_aur_pkg_info_array(int size) {
     AURPkgInfoArray *pkg_info_array = malloc(sizeof(AURPkgInfoArray));
     if (pkg_info_array == NULL) {
         return NULL;
     }
-    pkg_info_array->size = cJSON_GetArraySize(pkg_list);
-    pkg_info_array->items = calloc(pkg_info_array->size, sizeof(void *));
+    pkg_info_array->size = 0;
+    pkg_info_array->items = calloc(size, sizeof(void *));
     if (pkg_info_array->items == NULL) {
         return NULL;
     }
-    
-    int idx = 0;
+    return pkg_info_array;
+}
+
+AURPkgInfoArray *new_aur_pkg_info_array(cJSON *pkg_list) {
+    cJSON *pkg_data;
+    AURPkgInfoArray *pkg_info_array = new_empty_aur_pkg_info_array(cJSON_GetArraySize(pkg_list));
     cJSON_ArrayForEach(pkg_data, pkg_list) {
         AURPkgInfo *pkg_info = new_aur_pkg_info(pkg_data);
         if (pkg_info == NULL) {
             return NULL;
         }
-        pkg_info_array->items[idx] = pkg_info;
-        idx++;
+        pkg_info_array->items[pkg_info_array->size] = pkg_info;
+        pkg_info_array->size++;
     }
     return pkg_info_array;
 }
@@ -242,12 +246,18 @@ void aop_full_free(void **array, uint64_t array_size, free_cb members_callback, 
 }
 
 void aur_pkg_info_reference_free(AURPkgInfo *pointer) {
-   if (pointer == NULL) return;
+    if (pointer == NULL) return;
     free(pointer->conflicts);
     free(pointer->depends);
     free(pointer->keywords);
     free(pointer->opt_depends);
     free(pointer->make_depends);
+    free(pointer);
+}
+
+void aur_pkg_info_sub_array_free(AURPkgInfoArray *pointer) {
+    if (pointer == NULL) return;
+    free(pointer->items);
     free(pointer);
 }
 
@@ -1998,6 +2008,96 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_exis
     return 0;
 }
 
+int check_or_download_key(char *key_string, char *pkgbase_name) {
+    pkgbase_name = pkgbase_name ? pkgbase_name : "package";
+    gpgme_ctx_t ctx = NULL;
+    gpgme_key_t key = NULL;
+    int return_status = 0;
+    gpgme_error_t gpg_status = 0;
+
+    gpgme_check_version(NULL);
+
+    if ((gpg_status = gpgme_new(&ctx)) != 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't Initialise GPGME: %s\n", gpgme_strerror(gpg_status));
+        return 4;
+    }
+    
+    if ((gpg_status = gpgme_set_protocol(ctx, GPGME_PROTOCOL_OpenPGP)) != 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't set GPGME protocol to OpenPGP: %s\n", gpgme_strerror(gpg_status));
+        return_status = 4;
+        goto end;
+    }
+
+    if ((gpg_status = gpgme_op_keylist_start(ctx, key_string, 0)) != 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup local keylist: %s\n", gpgme_strerror(gpg_status));
+        return_status = 4;
+        goto end;
+    }
+
+    gpg_status = gpgme_op_keylist_next(ctx, &key);
+
+    gpgme_op_keylist_end(ctx);
+
+    if ((!gpg_status) && key) {
+        goto end;
+    }
+
+    gpgme_key_release(key);
+    key = NULL;
+
+    if (gpgme_err_code(gpg_status) != GPG_ERR_EOF) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup local keylist: %s\n", gpgme_strerror(gpg_status));
+        return_status = 4;
+        goto end;
+    }
+
+    printf("Need PGP key %s to build %s.\nImport key?[Y/n]: ", key_string, pkgbase_name);
+    char prompt[6];
+    char *input_successful = fgets(prompt, sizeof(prompt), stdin);
+    if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
+        fprintf(stderr, "\x1b[1;33mWARNING\x1b[0m: Build process for %s will probably fail without key! Please manually import your own.\n", pkgbase_name);
+        goto end;
+    }
+    
+    
+    if ((gpgme_set_keylist_mode(ctx, GPGME_KEYLIST_MODE_EXTERN)) != 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to set keylist mode to external: %s\n", gpgme_strerror(gpg_status));
+        return_status = 4;
+        goto end;
+    }
+    printf("Fetching key...\n");
+    if ((gpg_status = gpgme_op_keylist_start(ctx, key_string, 0)) != 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup external keylist: %s\n", gpgme_strerror(gpg_status));
+        return_status = 4;
+        goto end;
+    }
+
+    if ((gpg_status = gpgme_op_keylist_next(ctx, &key)) != 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup external keylist: %s\n", gpgme_strerror(gpg_status));
+        return_status = 4;
+        goto end;
+    }
+
+    gpgme_op_keylist_end(ctx);
+    if (!key) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't find key %s on keyserver\n", key_string);
+        return_status = 2;
+        goto end;
+    }
+    printf("Importing key...\n");
+    gpgme_key_t keys[2] = { key, NULL };
+    if ((gpg_status = gpgme_op_import_keys(ctx, keys)) != 0) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to import key %s: %s\n", key_string, gpgme_strerror(gpg_status));
+        return_status = 4;
+        goto end;
+    }
+end:
+    gpgme_key_release(key);
+    gpgme_release(ctx);
+    return return_status;
+
+}
+
 int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
     cJSON_Delete(_);
     (void)(options);
@@ -2514,8 +2614,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         free(to_ignore);
         return download_and_extraction_failed;
     }
-    int *fetched_bases = malloc(pkgs->size * sizeof(int));
-    int fetched_bases_count = 0;
+    AURPkgInfoArray *bases = new_empty_aur_pkg_info_array(pkgs->size);
     for (int pkg_idx = 0; pkg_idx < pkgs->size; pkg_idx++) {
         AURPkgInfo *pkg_info = pkgs->items[pkg_idx];
         if (!(pkg_info->name) || !(pkg_info->base) || !(pkg_info->base_id)) {
@@ -2540,48 +2639,33 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             );
         }
         uint8_t base_match = 0;
-        for (int idx = 0; idx < fetched_bases_count && idx < pkgs->size; idx++) {
-            if (pkg_info->base_id == fetched_bases[idx]) {
+        for (int idx = 0; idx < bases->size && idx < pkgs->size; idx++) {
+            if (pkg_info->base_id == bases->items[idx]->base_id) {
                 base_match = 1;
             }
         }
         if (base_match) {
             continue;
         }
-        fetched_bases[fetched_bases_count] = pkg_info->base_id;
-        fetched_bases_count++;
+        bases->items[bases->size] = pkg_info;
+        bases->size++;
     }
     if (!skip_review) {
-        int *viewed_bases = malloc((fetched_bases_count) * sizeof(int));
-        int viewed_bases_count = 0;
-        for (int pkg_idx = 0; pkg_idx < pkgs->size; pkg_idx++) {
-            AURPkgInfo *pkg_info = pkgs->items[pkg_idx];
+        for (int pkg_idx = 0; pkg_idx < bases->size; pkg_idx++) {
+            AURPkgInfo *pkg_info = bases->items[pkg_idx];
             if (!(pkg_info->name) || !(pkg_info->base) || !(pkg_info->base_id)) {
                 fprintf(stderr, "\x1b[1;31mError\x1b[0m: Required data for package name, base or base ID went missing.\n");
-                free(viewed_bases);
                 free(found_pkg_names);
                 aur_pkg_info_array_free(pkgs);
                 cJSON_Delete(response_body);
                 free(to_ignore);
                 return 6;
             }
-            uint8_t base_match = 0;
-            for (int idx = 0; idx < viewed_bases_count && idx < pkgs->size; idx++) {
-                if (pkg_info->base_id == fetched_bases[idx]) {
-                    base_match = 1;
-                }
-            }
-            if (base_match) {
-                continue;
-            }
-            viewed_bases[viewed_bases_count] = pkg_info->base_id;
-            viewed_bases_count++;
             printf("Build files for \033[1m%s\033[0m are:\n     ", pkg_info->base);
             DIR *dir = opendir(pkg_info->base);
             if (!dir) { 
                 printf("\n");
                 fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list directory\n"); 
-                free(viewed_bases);
                 free(found_pkg_names);
                 aur_pkg_info_array_free(pkgs);
                 cJSON_Delete(response_body);
@@ -2636,14 +2720,13 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             }
             chdir("..");
         }
-        free(viewed_bases);
         printf("Continue Installation? [Y/n]: ");
         input_successful = fgets(prompt, sizeof(prompt), stdin);
         if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
             printf("Installation aborted\n");
+            aur_pkg_info_sub_array_free(bases);
             aur_pkg_info_array_free(pkgs);
             free(found_pkg_names);
-            free(fetched_bases);
             cJSON_Delete(response_body);
             free(to_ignore);
             return 0;
@@ -2660,26 +2743,18 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     );
     char **base_dependencies = NULL;
     uint32_t base_dependencies_amount = 0;
-    for (int pkg_idx = 0; pkg_idx < pkgs->size; pkg_idx++) {
-        AURPkgInfo *pkg_info = pkgs->items[pkg_idx];
+    int loop_status = 0;
+    for (int pkg_idx = 0; pkg_idx < bases->size; pkg_idx++) {
+        AURPkgInfo *pkg_info = bases->items[pkg_idx];
         if (!(pkg_info->name) || !(pkg_info->base) || !(pkg_info->base_id)) {
             fprintf(stderr, "\x1b[1;31mError\x1b[0m: Required data for package name, base or base ID went missing.\n");
             free(found_pkg_names);
+            aur_pkg_info_sub_array_free(bases);
             aur_pkg_info_array_free(pkgs);
             cJSON_Delete(response_body);
-            free(fetched_bases);
             free(to_ignore);
             
             return 6;
-        }
-        uint8_t base_match = 0;
-        for (int idx = 0; idx < fetched_bases_count && idx < pkgs->size; idx++) {
-            if (pkg_info->base_id == fetched_bases[idx]) {
-                base_match = 1;
-            }
-        }
-        if (base_match) {
-            continue;
         }
         uint8_t different_base = 0;
         for (uint32_t idx = 0; pkg_info->name[idx] != '\0'; idx++) {
@@ -2688,102 +2763,112 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 break;
             }
         }
-        if (different_base) {
-            chdir(pkg_info->base);
-            struct stat stat_info;
-            int stat_status = stat(".SRCINFO", &stat_info);
-            if (stat_status) {
-                printf("Generating information on dependencies for package base \x1b[1m%s\x1b[0m...\n", pkg_info->base);
-                pid_t pid = fork();
-                if (pid < 0) {
-                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
-                    free(found_pkg_names);
-                    aur_pkg_info_array_free(pkgs);
-                    cJSON_Delete(response_body);
-                    free(fetched_bases);
-                    free(to_ignore);
-                    return 4;
-                }
-                if (pid == 0) {
-                    int fd = open(".SRCINFO", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                    if (fd == -1) {
-                        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to generate .SRCINFO: %s\n", strerror(errno));
-                        _exit(127);
-                    }
-                    dup2(fd, STDOUT_FILENO);
-                    dup2(fd, STDERR_FILENO);
-                    close(fd);
-                    char *argv[] = {
-                        "makepkg", "--printsrcinfo", NULL
-                    };
-                    execvp("makepkg", argv);
-                    fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
+        
+        chdir(pkg_info->base);
+        struct stat stat_info;
+        int stat_status = stat(".SRCINFO", &stat_info);
+        if (stat_status) {
+            printf("Generating information on dependencies for package base \x1b[1m%s\x1b[0m...\n", pkg_info->base);
+            pid_t pid = fork();
+            if (pid < 0) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
+                loop_status = 4;
+                break;
+            }
+            if (pid == 0) {
+                int fd = open(".SRCINFO", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd == -1) {
+                    fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to generate .SRCINFO: %s\n", strerror(errno));
                     _exit(127);
                 }
-                int32_t srcinfo_status_info;
-                if (waitpid(pid, &srcinfo_status_info, 0) < 0) {
-                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for makepkg command: %s\n", strerror(errno));
-                    free(found_pkg_names);
-                    aur_pkg_info_array_free(pkgs);
-                    cJSON_Delete(response_body);
-                    free(fetched_bases);
-                    free(to_ignore);
-                    return 4;
-                }
-                int srcinfo_status = WEXITSTATUS(srcinfo_status_info);
-                if (srcinfo_status_info == -1) {
-                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: waitpid error -1\n");
-                    free(found_pkg_names);
-                    aur_pkg_info_array_free(pkgs);
-                    cJSON_Delete(response_body);
-                    free(fetched_bases);
-                    free(to_ignore);
-                    return 4;
-                    
-                }
-                if (WIFSIGNALED(srcinfo_status_info)) {
-                    fprintf(
-                        stderr, "\x1b[1;33mStopping\x1b[0m: makepkg exited due to signal %d: %s\n", 
-                        WTERMSIG(srcinfo_status_info), strsignal(WTERMSIG(srcinfo_status_info)));
-                    free(found_pkg_names);
-                    aur_pkg_info_array_free(pkgs);
-                    cJSON_Delete(response_body);
-                    free(fetched_bases);
-                    free(to_ignore);
-                    return 128+WTERMSIG(srcinfo_status_info);
-                }
-                if (srcinfo_status) {
-                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", srcinfo_status);
-                    free(found_pkg_names);
-                    aur_pkg_info_array_free(pkgs);
-                    cJSON_Delete(response_body);
-                    free(fetched_bases);
-                    free(to_ignore);
-                    return 32+srcinfo_status;
-                }
+                dup2(fd, STDOUT_FILENO);
+                dup2(fd, STDERR_FILENO);
+                close(fd);
+                char *argv[] = {
+                    "makepkg", "--printsrcinfo", NULL
+                };
+                execvp("makepkg", argv);
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
+                _exit(127);
             }
-
-            int srcinfo_closed;
-            FILE *srcinfo_file;
-            char srcinfo[PATH_MAX];
-
-            srcinfo_file = fopen(".SRCINFO", "r");
-            if (srcinfo_file == NULL) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: error opening .SRCINFO\n");
-                free(found_pkg_names);
-                aur_pkg_info_array_free(pkgs);
-                cJSON_Delete(response_body);
-                free(fetched_bases);
-                free(to_ignore);
-                return 3;
+            int32_t srcinfo_status_info;
+            if (waitpid(pid, &srcinfo_status_info, 0) < 0) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for makepkg command: %s\n", strerror(errno));
+                loop_status = 4;
+                break;
             }
-            size_t srcinfo_size = fread(srcinfo, sizeof(char), PATH_MAX, srcinfo_file);
-
-            srcinfo_closed = fclose(srcinfo_file);
-            if (srcinfo_closed == -1) {
-                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't close .SRCINFO file\n");
+            int srcinfo_status = WEXITSTATUS(srcinfo_status_info);
+            if (srcinfo_status_info == -1) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: waitpid error -1\n");
+                loop_status = 4;
+                break;
+                
             }
+            if (WIFSIGNALED(srcinfo_status_info)) {
+                fprintf(
+                    stderr, "\x1b[1;33mStopping\x1b[0m: makepkg exited due to signal %d: %s\n", 
+                    WTERMSIG(srcinfo_status_info), strsignal(WTERMSIG(srcinfo_status_info)));
+                loop_status = 128+WTERMSIG(srcinfo_status_info);
+                break;
+            }
+            if (srcinfo_status) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", srcinfo_status);
+                loop_status = 32+srcinfo_status;
+                break;
+            }
+        }
 
+        int srcinfo_closed;
+        FILE *srcinfo_file;
+        char srcinfo[PATH_MAX];
+
+        srcinfo_file = fopen(".SRCINFO", "r");
+        if (srcinfo_file == NULL) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: error opening .SRCINFO\n");
+            loop_status = 3;
+            break;
+        }
+        size_t srcinfo_size = fread(srcinfo, sizeof(char), PATH_MAX, srcinfo_file);
+
+        srcinfo_closed = fclose(srcinfo_file);
+        if (srcinfo_closed == -1) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't close .SRCINFO file\n");
+        }
+        char *key_content = malloc(srcinfo_size);
+        uint16_t key_idx = 0;
+        char gpgkey_line_match[] = "\n\tvalidpgpkeys = ";
+        int record_gpgkey = 0;
+        uint16_t line_index = 0;
+        for (uint16_t idx = 0; idx < srcinfo_size; idx++) {
+            if ((!record_gpgkey) && srcinfo[idx] == gpgkey_line_match[line_index]) {
+                line_index++;
+                continue;
+            }
+            if (gpgkey_line_match[line_index] == '\0') {
+                record_gpgkey = 1;
+            }
+            line_index = 0;
+            if (record_gpgkey) {
+                if (srcinfo[idx] == '\n') {
+                    key_content[key_idx] = '\0';
+                    record_gpgkey = 0;
+                    line_index++;
+                    break;
+                }
+                key_content[key_idx] = srcinfo[idx];
+
+                key_idx++;
+            }
+        }
+        if (key_idx) {
+            loop_status = check_or_download_key(key_content, pkg_info->base);
+        }
+        free(key_content);
+        if (loop_status) {
+            break;
+        }
+        
+        if (different_base) {
             char *dep_content = malloc(srcinfo_size);
             if (base_dependencies == NULL) {
                 base_dependencies = malloc(PATH_MAX * pkgs->size * sizeof(void *));
@@ -2791,7 +2876,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             char line_match[] = "\n\tdepends = ";
             uint8_t record_dependency = 0;
             uint16_t dep_idx = 0;
-            uint16_t line_index = 0;
+            line_index = 0;
             for (uint16_t idx = 0; idx < srcinfo_size; idx++) {
                 if ((!record_dependency) && srcinfo[idx] == line_match[line_index]) {
                     line_index++;
@@ -2833,10 +2918,17 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 }
             }
             free(dep_content);
-            chdir("..");
         }
+        chdir("..");
     }
-    free(fetched_bases);
+    if (loop_status) {
+        free(found_pkg_names);
+        aur_pkg_info_sub_array_free(bases);
+        aur_pkg_info_array_free(pkgs);
+        cJSON_Delete(response_body);
+        free(to_ignore);
+        return loop_status;
+    }
     // for (uint32_t idx = 0; idx < base_dependencies_amount; idx++) {
     //     if (idx) {
     //         printf(", ");
@@ -3319,8 +3411,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     } else {
         free(all_depends);
     }
-    int *built_bases = malloc((fetched_bases_count) * sizeof(int));
-    int built_bases_count = 0;
     uint32_t install_count = 0;
     uint32_t install_args_len = 0;
     uint32_t arg_max = sysconf(_SC_PAGE_SIZE)*sizeof(int)*CHAR_BIT-1;
@@ -3335,56 +3425,31 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         return 8;
     }
     timestamp_2 = time_spec.tv_sec;
-    for (int pkg_idx = 0; pkg_idx < pkgs->size; pkg_idx++) {
-        AURPkgInfo *pkg_info = pkgs->items[pkg_idx];
+    loop_status = 0;
+    for (int pkg_idx = 0; pkg_idx < bases->size; pkg_idx++) {
+        AURPkgInfo *pkg_info = bases->items[pkg_idx];
         if (pkg_info->base == NULL || !(pkg_info->base_id)) {
             fprintf(stderr, "\x1b[1;31mError\x1b[0m: Required data for package base or base ID went missing.\n");
-            aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-            free(built_bases);
-            free(found_pkg_names);
-            aur_pkg_info_array_free(pkgs);
-            cJSON_Delete(response_body);
-            for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
-                free(install_args[idx]);
-            }
-            free(install_args);
-            return 6;
+            loop_status = 6;
+            break;
         }
-        uint8_t base_match = 0;
-        for (int idx = 0; idx < built_bases_count && idx < pkgs->size; idx++) {
-            if (pkg_info->base_id == built_bases[idx]) {
-                base_match = 1;
-            }
-        }
-        if (base_match) {
-            continue;
-        }
-        built_bases[built_bases_count] = pkg_info->base_id;
-        built_bases_count++;
-        if (fetched_bases_count > 1) {
-            printf("Making Package %d/%d \x1b[1m%s\x1b[0m\n", built_bases_count, fetched_bases_count, pkg_info->base);
+        if (bases->size > 1) {
+            printf("Making Package %d/%d \x1b[1m%s\x1b[0m\n", pkg_idx, bases->size, pkg_info->base);
         } else {
             printf("Making Package \x1b[1m%s\x1b[0m\n", pkg_info->base);
         }
         if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
-            return 8;
+            loop_status = 8;
+            break;
         }
         timestamp_3 = time_spec.tv_sec;
         chdir(pkg_info->base);
         pid_t pid = fork();
         if (pid < 0) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
-            aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-            free(built_bases);
-            free(found_pkg_names);
-            aur_pkg_info_array_free(pkgs);
-            cJSON_Delete(response_body);
-            for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
-                free(install_args[idx]);
-            }
-            free(install_args);
-            return 4;
+            loop_status = 4;
+            break;
         }
         if (pid == 0) {
             char *argv[] = {
@@ -3397,16 +3462,8 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         int32_t makepkg_status_info;
         if (waitpid(pid, &makepkg_status_info, 0) < 0) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for makepkg command: %s\n", strerror(errno));
-            aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-            free(built_bases);
-            free(found_pkg_names);
-            aur_pkg_info_array_free(pkgs);
-            cJSON_Delete(response_body);
-            for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
-                free(install_args[idx]);
-            }
-            free(install_args);
-            return 4;
+            loop_status = 4;
+            break;
         }
         int makepkg_status = WEXITSTATUS(makepkg_status_info);
         if (makepkg_status || WIFSIGNALED(makepkg_status_info)) {
@@ -3423,31 +3480,15 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", makepkg_status);
                 return_code = 32+ makepkg_status;
             }
-            aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-            free(built_bases);
-            free(found_pkg_names);
-            aur_pkg_info_array_free(pkgs);
-            cJSON_Delete(response_body);
-            for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
-                free(install_args[idx]);
-            }
-            free(install_args);
-            return return_code;
+            loop_status = return_code;
+            break;
         }
         DIR *dir = opendir("./");
         if (!dir) { 
             printf("\n");
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list directory\n"); 
-            aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-            free(built_bases);
-            free(found_pkg_names);
-            aur_pkg_info_array_free(pkgs);
-            cJSON_Delete(response_body);
-            for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
-                free(install_args[idx]);
-            }
-            free(install_args);
-            return 4;
+            loop_status = 4;
+            break;
         }
         struct dirent *dir_item;
         while ((dir_item = readdir(dir)) != NULL) {
@@ -3474,16 +3515,8 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                     if (install_args_len >= arg_max) {
                         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Too many packages to list (%d max).\n", arg_max);
                         closedir(dir);
-                        aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-                        free(built_bases);
-                        free(found_pkg_names);
-                        aur_pkg_info_array_free(pkgs);
-                        cJSON_Delete(response_body);
-                        for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
-                            free(install_args[idx]);
-                        }
-                        free(install_args);
-                        return 9;
+                        loop_status = 9;
+                        break;
                     }
                     install_count++;
                     uint32_t d_name_size;
@@ -3497,15 +3530,32 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 }
             }
         }
+        if (loop_status != 0) {
+            break;
+        }
         closedir(dir);
         chdir("..");
         if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
-            return 8;
+            loop_status = 8;
+            break;
         }
         duration_elapsed = time_spec.tv_sec-timestamp_3;
         printf("Finished making %s in %02lu:%02lu:%02lu\n", pkg_info->base, duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
     }
+    aur_pkg_info_sub_array_free(bases);
+    if (loop_status != 0) {
+        aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
+        free(found_pkg_names);
+        aur_pkg_info_array_free(pkgs);
+        cJSON_Delete(response_body);
+        for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
+            free(install_args[idx]);
+        }
+        free(install_args);
+        return loop_status;
+    }
+    
     if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
         return 8;
@@ -3525,7 +3575,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 free(install_args[idx]);
             }
             free(install_args);
-            free(built_bases);
             free(found_pkg_names);
             cJSON_Delete(response_body);
             return 64+errno;
@@ -3543,7 +3592,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         if (waitpid(pid, &install_info, 0) < 0) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Waiting for install process failed: %s\n", strerror(errno));
             aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-            free(built_bases);
             free(found_pkg_names);
             cJSON_Delete(response_body);
             return 64+errno;
@@ -3564,7 +3612,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 return_code = 64;
             }
             aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-            free(built_bases);
             free(found_pkg_names);
             cJSON_Delete(response_body);
             return return_code;
@@ -3575,7 +3622,6 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         free(install_args);
     }
-    free(built_bases);
 
     if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
