@@ -23,6 +23,7 @@
 #include <git2.h>
 #include <sys/ioctl.h>
 #include <gpgme.h>
+#include <sys/types.h>
 
 #define LONG_NAME "Basic Arch User Repository (AUR) Package Manager"
 #define SHORT_NAME "baurpm"
@@ -330,9 +331,15 @@ typedef struct progress_data {
     64+: pacman errors
     128+: signals
     */
-   
 
-int nftw_cb(const char *path, const struct stat *stat_info, int typeflag, struct FTW *ftwbuf) {
+struct chownr_cb_args {
+    uid_t uid;
+    gid_t gid;
+};
+
+static struct chownr_cb_args *chownr_args;
+
+int rmrf_cb(const char *path, const struct stat *stat_info, int typeflag, struct FTW *ftwbuf) {
     (void)(stat_info);
     (void)(typeflag);
     (void)(ftwbuf);
@@ -343,8 +350,59 @@ int nftw_cb(const char *path, const struct stat *stat_info, int typeflag, struct
     return rm_status;
 }
 
+int chownr_cb(const char *path, const struct stat *stat_info, int typeflag, struct FTW *ftwbuf) {
+    (void)(stat_info);
+    (void)(typeflag);
+    (void)(ftwbuf);
+    int rm_status;
+    if ((rm_status = chown(path, chownr_args->uid, chownr_args->gid))) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to chown %s: %s\n", path, strerror(errno));
+    }
+    return rm_status;
+}
+
 int rmrf(const char *path) {
-    return nftw(path, nftw_cb, 64, FTW_DEPTH | FTW_PHYS);
+    return nftw(path, rmrf_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
+
+int chownr(const char *path, uid_t uid, gid_t gid) {
+    struct chownr_cb_args cb_args = {uid, gid};
+    chownr_args = &cb_args;
+    return nftw(path, chownr_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
+
+typedef struct {
+    uid_t uid;
+    gid_t gid;
+} SubCredentials;
+
+SubCredentials get_sub_credentials() {
+    SubCredentials sub = {0, 0};
+    char *endptr;
+    errno = 0;
+    char *env_uid = getenv("SUDO_UID");
+    char *env_gid = getenv("SUDO_GID");
+    if (env_uid && env_gid) {
+        sub.uid = strtoul(env_uid, &endptr, 10);
+        sub.gid = strtoul(env_uid, &endptr, 10);
+        if (sub.uid > UINT32_MAX || sub.gid > UINT32_MAX || errno == ERANGE || *endptr != '\0') {
+            sub.uid = 0;
+            sub.gid = 0;
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Unable to store env variable as unsigned integer: %s", strerror(errno));
+        }
+    }
+    if (sub.uid == 0 || sub.gid == 0) {
+        errno = 0;
+        struct passwd *pwinfo = getpwnam("nobody");
+        if (pwinfo != NULL) {
+            sub.uid = pwinfo->pw_uid;
+            sub.gid = pwinfo->pw_gid;
+        }
+        if (errno) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to find nobody user: %s", strerror(errno));
+        }
+    }
+    return sub;
 }
 
 enum pkg_dir_status check_pkg_dir_status(const char *path) {   
@@ -833,7 +891,18 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
 char *download_pkg(char *url_path, uint8_t *status) {
     const char *err_msg_prefix = "\x1b[1;31mFatal\x1b[0m: Failed to download the package: "; 
     uid_t uid = getuid();
-    struct passwd* pwd = getpwuid(uid);
+    uid_t sub_uid = uid;
+    SubCredentials sub_cred = {0, 0};
+    if (uid == 0) {
+        sub_cred = get_sub_credentials();
+        if (sub_cred.uid == 0 || sub_cred.gid == 0) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Unable to find non-root credentials to run as\n");
+            *status = 10;
+            return "";
+        }
+        sub_uid = sub_cred.uid;
+    }
+    struct passwd* pwd = getpwuid(sub_uid);
 
     if (!pwd) {
         fprintf(stderr, "%sCould not get home directory\n", err_msg_prefix);
@@ -1602,7 +1671,7 @@ uint32_t git_pull_pkg(char *base_name, int32_t keep_existing) {
         }
 
         if (chdir(base_name) < 0) {
-            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to change directory to %s: %s", base_name, strerror(errno));
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to change directory to %s: %s\n", base_name, strerror(errno));
             return_code = 3;
             goto cleanup;
         }
@@ -1811,7 +1880,17 @@ uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
         downloaded_bases_count++;
 
         uid_t uid = getuid();
-        struct passwd* pwd = getpwuid(uid);
+        uid_t sub_uid = uid;
+        SubCredentials sub_cred = {0, 0};
+        if (uid == 0) {
+            sub_cred = get_sub_credentials();
+            if (sub_cred.uid == 0 || sub_cred.gid == 0) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Unable to find non-root credentials to run as\n");
+                return 10;
+            }
+            sub_uid = sub_cred.uid;
+        }
+        struct passwd* pwd = getpwuid(sub_uid);
 
         if (!pwd) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory\n");
@@ -1820,7 +1899,7 @@ uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
         }
         uint32_t hdirc;
         for (hdirc = 0; pwd->pw_dir[hdirc] != '\0'; hdirc++);
-        char cache_dir[] = ".cache/baurpm";
+        char cache_dir[] = ".cache";
         uint32_t dirc = hdirc + sizeof(cache_dir) + 1;
         char *cache_dir_buffer = malloc(dirc);
         if (cache_dir_buffer == NULL) {
@@ -1828,26 +1907,40 @@ uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
             return_code = 8;
             break;
         }
+        snprintf(cache_dir_buffer, dirc, "%s/%s", pwd->pw_dir, cache_dir);
+        mkdir(cache_dir_buffer, 0777);
+        free(cache_dir_buffer);
+        char baurpm_dir[] = ".cache/baurpm";
+        dirc = hdirc + sizeof(baurpm_dir) + 1;
+        char *baurpm_dir_buffer = malloc(dirc);
+        if (baurpm_dir_buffer == NULL) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+            return_code = 8;
+            break;
+        }
+        snprintf(baurpm_dir_buffer, dirc, "%s/%s", pwd->pw_dir, baurpm_dir);
+        mkdir(baurpm_dir_buffer, 0777);
 
         // construct path
-        if (snprintf(cache_dir_buffer, dirc, "%s/%s", pwd->pw_dir, cache_dir) < 0) {
+        if (snprintf(baurpm_dir_buffer, dirc, "%s/%s", pwd->pw_dir, baurpm_dir) < 0) {
             fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't concatenate string: %s\n", strerror(errno));
-            free(cache_dir_buffer);
+            free(baurpm_dir_buffer);
             return_code = 8;
             break;
         }
 
-        if (chdir(cache_dir_buffer) < 0) {
-            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to change directory to %s: %s", cache_dir_buffer, strerror(errno));
-            free(cache_dir_buffer);
+        if (chdir(baurpm_dir_buffer) < 0) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to change directory to %s: %s\n", baurpm_dir_buffer, strerror(errno));
+            free(baurpm_dir_buffer);
             return_code = 3;
             break;
         }
-        free(cache_dir_buffer);
+        free(baurpm_dir_buffer);
         // extract package
         enum pkg_dir_status dir_status = check_pkg_dir_status(pkg_base->valuestring);
         switch (dir_status) {
         case GIT_REPO:
+            chownr(pkg_base->valuestring, uid, getgid());
             return_code = git_pull_pkg(pkg_base->valuestring, keep_existing);
             break;
 
@@ -1865,6 +1958,10 @@ uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
         case CHECK_ERROR:
             return_code = 3;
             break;
+        }
+
+        if (uid == 0) {
+            chownr(pkg_base->valuestring, sub_cred.uid, sub_cred.gid);
         }
 
         if (return_code) {
@@ -1978,7 +2075,17 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_exis
             return 6;
         }
         uid_t uid = getuid();
-        struct passwd* pwd = getpwuid(uid);
+        uid_t sub_uid = uid;
+        SubCredentials sub_cred = {0, 0};
+        if (uid == 0) {
+            sub_cred = get_sub_credentials();
+            if (sub_cred.uid == 0 || sub_cred.gid == 0) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Unable to find non-root credentials to run as\n");
+                return 10;
+            }
+            sub_uid = sub_cred.uid;
+        }
+        struct passwd* pwd = getpwuid(sub_uid);
 
         if (!pwd) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory\n");
@@ -2009,11 +2116,24 @@ uint32_t download_and_extract_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_exis
 }
 
 int check_or_download_key(char *key_string, char *pkgbase_name) {
+    uid_t uid = getuid();
     pkgbase_name = pkgbase_name ? pkgbase_name : "package";
+    char *home_dir_buffer = NULL;
     gpgme_ctx_t ctx = NULL;
     gpgme_key_t key = NULL;
     int return_status = 0;
     gpgme_error_t gpg_status = 0;
+    struct passwd* pwd = NULL;
+    int stat_status = 0;
+
+    SubCredentials sub_cred = {0, 0};
+    if (uid == 0) {
+        sub_cred = get_sub_credentials();
+        if (sub_cred.uid == 0 || sub_cred.gid == 0) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Unable to find non-root credentials to run as\n");
+            return 10;
+        }
+    }
 
     gpgme_check_version(NULL);
 
@@ -2027,6 +2147,25 @@ int check_or_download_key(char *key_string, char *pkgbase_name) {
         return_status = 4;
         goto end;
     }
+    if (uid == 0) {
+        pwd = getpwuid(sub_cred.uid);
+
+        if (!pwd) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory");
+            return_status = 3;
+            goto end;
+        }
+        home_dir_buffer = malloc(PATH_MAX);
+        snprintf(home_dir_buffer, PATH_MAX, "%s/.gnupg", pwd->pw_dir);
+        fprintf(stderr, "\x1b[1;33mWarning\x1b[0m: %s will not be able to import keys as root if keyboxd is running. \nPlease temporarily stop keyboxd or add the following key manually: %s\n", SHORT_NAME, key_string);
+        struct stat stat_info;
+        stat_status = stat(home_dir_buffer, &stat_info);
+        if ((gpg_status = gpgme_ctx_set_engine_info(ctx, GPGME_PROTOCOL_OpenPGP, "/usr/bin/gpg", home_dir_buffer)) != 0) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to set gpg home directory to %s: %s\n", home_dir_buffer, gpgme_strerror(gpg_status));
+            return_status = 4;
+            goto end;
+        }
+    }
 
     if ((gpg_status = gpgme_op_keylist_start(ctx, key_string, 0)) != 0) {
         fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup local keylist: %s\n", gpgme_strerror(gpg_status));
@@ -2035,6 +2174,9 @@ int check_or_download_key(char *key_string, char *pkgbase_name) {
     }
 
     gpg_status = gpgme_op_keylist_next(ctx, &key);
+    if (uid == 0 && !stat_status) {
+        chownr(home_dir_buffer, sub_cred.uid, sub_cred.gid);
+    }
 
     gpgme_op_keylist_end(ctx);
 
@@ -2055,7 +2197,7 @@ int check_or_download_key(char *key_string, char *pkgbase_name) {
     char prompt[6];
     char *input_successful = fgets(prompt, sizeof(prompt), stdin);
     if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
-        fprintf(stderr, "\x1b[1;33mWARNING\x1b[0m: Build process for %s will probably fail without key! Please manually import your own.\n", pkgbase_name);
+        fprintf(stderr, "\x1b[1;33mWarning\x1b[0m: Build process for %s will probably fail without key! Please manually import your own.\n", pkgbase_name);
         goto end;
     }
     
@@ -2092,6 +2234,7 @@ int check_or_download_key(char *key_string, char *pkgbase_name) {
         goto end;
     }
 end:
+    free(home_dir_buffer);
     gpgme_key_release(key);
     gpgme_release(ctx);
     return return_status;
@@ -2365,7 +2508,17 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             break;
         }
         uid_t uid = getuid();
-        struct passwd* pwd = getpwuid(uid);
+        uid_t sub_uid = uid;
+        SubCredentials sub_cred = {0, 0};
+        if (uid == 0) {
+            sub_cred = get_sub_credentials();
+            if (sub_cred.uid == 0 || sub_cred.gid == 0) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Unable to find non-root credentials to run as\n");
+                return 10;
+            }
+            sub_uid = sub_cred.uid;
+        }
+        struct passwd* pwd = getpwuid(sub_uid);
 
         if (!pwd) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory");
@@ -2451,6 +2604,15 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
 }
 
 int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_data) {
+    uid_t uid = getuid();
+    SubCredentials sub_cred = {0, 0};
+    if (uid == 0) {
+        sub_cred = get_sub_credentials();
+        if (sub_cred.uid == 0 || sub_cred.gid == 0) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Unable to find non-root credentials to run as\n");
+            return 10;
+        }
+    }
     uint8_t skip_missing = 0;
     uint8_t skip_review = 0;
     int32_t keep_existing = 0;
@@ -2734,11 +2896,11 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     }
     printf("Checking dependencies...\n");
     printf(
-        "Note: this version doesn't support nested aur dependencies. "
+        "\x1b[1;34mNote\x1b[0m: this version doesn't support nested aur dependencies. "
         "The build process will fail if a package has aur dependencies more than 1 dependency layer deep.\n"
     );
     printf(
-        "WARNING: this version doesn't check for dependency version conflicts. "
+        "\x1b[1;33mWarning\x1b[0m: this version doesn't check for dependency version conflicts. "
         "Please make sure all your packages are up to date or face the risk of a partial upgrade\n"
     );
     char **base_dependencies = NULL;
@@ -2784,10 +2946,25 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 dup2(fd, STDOUT_FILENO);
                 dup2(fd, STDERR_FILENO);
                 close(fd);
-                char *argv[] = {
+                char *uid_string = NULL;
+                char *exec_file = "makepkg";
+                char *base_argv[] = {
                     "makepkg", "--printsrcinfo", NULL
                 };
-                execvp("makepkg", argv);
+                char **argv = base_argv;
+                if (uid == 0) {
+                    chown(".", sub_cred.uid, sub_cred.gid);
+                    uint8_t uid_buffer_max = sizeof("#4294967295");
+                    uid_string = malloc(uid_buffer_max);
+                    snprintf(uid_string, uid_buffer_max, "#%u", sub_cred.uid);
+                    char *root_argv[] = {
+                        "sudo", "-u", uid_string, base_argv[0], base_argv[1], base_argv[2]
+                    };
+                    argv = root_argv;
+                    exec_file = "sudo";
+                }
+
+                execvp(exec_file, argv);
                 fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
                 _exit(127);
             }
@@ -3198,10 +3375,25 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 return 4;
             }
             if (pid == 0) {
-                char *argv[] = {
+                char *uid_string = NULL;
+                char *exec_file = "makepkg";
+                char *base_argv[] = {
                     "makepkg", "-sf", NULL
                 };
-                execvp("makepkg", argv);
+                char **argv = base_argv;
+                if (uid == 0) {
+                    chown(".", sub_cred.uid, sub_cred.gid);
+                    uint8_t uid_buffer_max = sizeof("#4294967295");
+                    uid_string = malloc(uid_buffer_max);
+                    snprintf(uid_string, uid_buffer_max, "#%u", sub_cred.uid);
+                    char *root_argv[] = {
+                        "sudo", "-u", uid_string, base_argv[0], base_argv[1], base_argv[2]
+                    };
+                    argv = root_argv;
+                    exec_file = "sudo";
+                }
+
+                execvp(exec_file, argv);
                 fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
                 _exit(127);
             }
@@ -3452,10 +3644,25 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             break;
         }
         if (pid == 0) {
-            char *argv[] = {
+            char *uid_string = NULL;
+            char *exec_file = "makepkg";
+            char *base_argv[] = {
                 "makepkg", "-sf", NULL
             };
-            execvp("makepkg", argv);
+            char **argv = base_argv;
+            if (uid == 0) {
+                chown(".", sub_cred.uid, sub_cred.gid);
+                uint8_t uid_buffer_max = sizeof("#4294967295");
+                uid_string = malloc(uid_buffer_max);
+                snprintf(uid_string, uid_buffer_max, "#%u", sub_cred.uid);
+                char *root_argv[] = {
+                    "sudo", "-u", uid_string, base_argv[0], base_argv[1], base_argv[2]
+                };
+                argv = root_argv;
+                exec_file = "sudo";
+            }
+
+            execvp(exec_file, argv);
             fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
             _exit(127);
         }
@@ -3988,7 +4195,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             }
             printf("Successfully upgraded archlinux-keyring\n");
             printf(
-                "\x1b[1;33mWARNING\x1b[0m: The system has been \x1b[mPARTIALLY UPGRADED!\x1b[0m "
+                "\x1b[1;33mWarning\x1b[0m: The system has been \x1b[mPARTIALLY UPGRADED!\x1b[0m "
                 "In other words aborting now and not fully upgrading with pacman -Syu may leave your "
                 "system in a broken state! So please let it run or do it manually\n"
             );
@@ -4098,8 +4305,11 @@ int main(int32_t argc, char *argv[]) {
 
     uid_t uid = getuid();
     if (uid == 0) {
-        fprintf(stderr, "Support for running this program as root is not yet implemented!\n");
-        return 1;
+        fprintf(stderr, 
+            "\x1b[1;33mWarning\x1b[0m: This program has been run as root which is discouraged. \n"
+            "Things may break and "
+            "\x1b[1;33mRISK CAUSING DAMAGE TO YOUR SYSTEM\x1b[0m\n"
+        );
     }
 
     if (argc < 2) {
