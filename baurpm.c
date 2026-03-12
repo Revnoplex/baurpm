@@ -3626,7 +3626,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             break;
         }
         if (bases->size > 1) {
-            printf("Making Package %d/%d \x1b[1m%s\x1b[0m\n", pkg_idx, bases->size, pkg_info->base);
+            printf("Making Package %d/%d \x1b[1m%s\x1b[0m\n", pkg_idx+1, bases->size, pkg_info->base);
         } else {
             printf("Making Package \x1b[1m%s\x1b[0m\n", pkg_info->base);
         }
