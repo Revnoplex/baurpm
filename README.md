@@ -66,7 +66,7 @@ Use `./baurpm.py` to use the python version
 Run `baurpm -H` for a list of more commands and usage
 
 ## Updating
-This program is not in the AUR at this time, so you cannot update this program using itself.
+This program is currently not in the AUR, so you cannot update this program using itself.
 
 Instead to update, run
 ```
