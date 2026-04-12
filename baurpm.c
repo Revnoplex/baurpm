@@ -1482,7 +1482,7 @@ uint32_t git_clone_pkg(char *base_name) {
         return 4;
     }
 
-    const char url_prefix[] = ".git";
+    const char url_suffix[] = ".git";
     pd.path = base_name;
     pd.operation = "Cloning";
 
@@ -1495,7 +1495,7 @@ uint32_t git_clone_pkg(char *base_name) {
     
     // calculate the url buffer size
     // should be the addition of the sizes of 2 parts: the base url and the url path
-    uint32_t url_size = sizeof(AUR_BASE_URL) + base_name_size+sizeof(url_prefix);
+    uint32_t url_size = sizeof(AUR_BASE_URL) + base_name_size+sizeof(url_suffix);
     
     // then allocate the buffer for the url
     char *url_buffer = malloc(url_size);
@@ -1505,7 +1505,7 @@ uint32_t git_clone_pkg(char *base_name) {
     }
    
     // then construct the url
-    if (snprintf(url_buffer, url_size, "%s/%s%s", AUR_BASE_URL, base_name, url_prefix) < 0) {
+    if (snprintf(url_buffer, url_size, "%s/%s%s", AUR_BASE_URL, base_name, url_suffix) < 0) {
         fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't concatenate string: %s\n", strerror(errno));
         return_code = 8;
         goto cleanup;
