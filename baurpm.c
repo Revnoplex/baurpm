@@ -488,6 +488,44 @@ static int copy_data(struct archive *ar, struct archive *aw) {
 	}
 }
 
+int run_command(char *argv[], int *command_status, int no_stop) {
+    char *lower_levels[] = {
+        "\x1b[1;33mWarning\x1b[0m:", "\x1b[1;31mError\x1b[0m", "\x1b[1;31mError\x1b[0m"
+    };
+    char *higher_levels[] = {
+        "\x1b[1;33mStopping\x1b[0m", "\x1b[1;31mError\x1b[0m", "\x1b[1;31mFatal\x1b[0m"
+    };
+    char **levels = higher_levels;
+    if (no_stop) {
+        levels = lower_levels;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "%s: Error forking process: %s\n", levels[2], strerror(errno));
+        return 4;
+    }
+    if (pid == 0) {
+        execvp(argv[0], argv);
+        fprintf(stderr, "%s: %s failed to run: %s\n", levels[1], argv[0], strerror(errno));
+        _exit(127);
+    }
+    if (waitpid(pid, command_status, 0) < 0) {
+        fprintf(stderr, "%s: Error waiting for %s: %s\n", levels[2], argv[0], strerror(errno));
+        return 4;
+    }
+    if (WIFSIGNALED(*command_status)) {
+        if (WTERMSIG(*command_status) == SIGINT) {
+            fprintf(stderr, "%s: %s stopped by user\n", levels[0], argv[0]);
+        } else {
+            fprintf(
+                stderr, "%s: %s exited due to signal %d: %s\n", 
+                levels[0], argv[0], WTERMSIG(*command_status), strsignal(WTERMSIG(*command_status)));
+        }
+        return 128+WTERMSIG(*command_status);
+    }
+    return 0;
+}
+
 static int extract(const char *filename, int32_t keep_existing) {
     /*
     Source: https://github.com/libarchive/libarchive/blob/master/examples/untar.c
@@ -2564,35 +2602,15 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         printf("Press Enter to continue and view PKGBUILD");
         getchar();
         chdir(pkg_info->base);
-        pid_t pid = fork();
-        if (pid < 0) {
-            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to fork process: %s\n", strerror(errno));
-            continue;
-        }
-        if (pid == 0) {
-            char *argv[] = {
-                "less", "PKGBUILD", NULL
-            };
-            execvp("less", argv);
-            fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed: %s\n", strerror(errno));
-            _exit(127);
-        }
         int32_t less_status;
-        if (waitpid(pid, &less_status, 0) < 0) {
-            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed waiting for less command: %s\n", strerror(errno));
+        char *argv[] = {
+            "less", "PKGBUILD", NULL
+        };
+        int rc_status;
+        if ((rc_status = run_command(argv, &less_status, 1))) {
             continue;
         }
         int less_failed = WEXITSTATUS(less_status);
-        if (WIFSIGNALED(less_status)) {
-            if (WTERMSIG(less_status) == SIGINT) {
-                fprintf(stderr, "\x1b[1;33mWarning\x1b[0m: less command stopped by user\n");
-            } else {
-                fprintf(
-                    stderr, "\x1b[1;33mWarning\x1b[0m: less command exited due to signal %d: %s\n", 
-                    WTERMSIG(less_status), strsignal(WTERMSIG(less_status)));
-            }
-            continue;
-        }
         if (less_failed) {
             fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed with exit code %d\n", less_failed);
         }
@@ -2851,32 +2869,12 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             getchar();
             printf("\n");
             chdir(pkg_info->base);
-            pid_t pid = fork();
-            if (pid < 0) {
-                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to fork process: %s\n", strerror(errno));
-            }
-            if (pid == 0) {
-                char *argv[] = {
-                    "less", "PKGBUILD", NULL
-                };
-                execvp("less", argv);
-                fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed: %s\n", strerror(errno));
-                _exit(127);
-            }
             int32_t less_status;
-            if (waitpid(pid, &less_status, 0) < 0) {
-                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed waiting for less command: %s\n", strerror(errno));
-            }
+            char *argv[] = {
+                "less", "PKGBUILD", NULL
+            };
+            run_command(argv, &less_status, 1);
             int less_failed = WEXITSTATUS(less_status);
-            if (WIFSIGNALED(less_status)) {
-                if (WTERMSIG(less_status) == SIGINT) {
-                    fprintf(stderr, "\x1b[1;33mWarning\x1b[0m: less command stopped by user\n");
-                } else {
-                    fprintf(
-                        stderr, "\x1b[1;33mWarning\x1b[0m: less command exited due to signal %d: %s\n", 
-                        WTERMSIG(less_status), strsignal(WTERMSIG(less_status)));
-                }
-            }
             if (less_failed) {
                 fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed with exit code %d\n", less_failed);
             }
@@ -3358,76 +3356,40 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             }
             timestamp_3 = time_spec.tv_sec;
             chdir(pkg_base->valuestring);
-            pid_t pid = fork();
-            if (pid < 0) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
-                aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-                for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
-                    free(dep_install_args[idx]);
-                }
-                free(dep_install_args);
-                free(built_dep_bases);
-                free(found_pkg_names);
-                cJSON_Delete(required_dependencies);
-                cJSON_Delete(depends_response_body);
-                aur_pkg_info_array_free(pkgs);
-                cJSON_Delete(response_body);
-                return 4;
-            }
-            if (pid == 0) {
-                char *uid_string = NULL;
-                char *exec_file = "makepkg";
-                char *base_argv[] = {
-                    "makepkg", "-sf", NULL
-                };
-                char **argv = base_argv;
-                if (uid == 0) {
-                    chown(".", sub_cred.uid, sub_cred.gid);
-                    uint8_t uid_buffer_max = sizeof("#4294967295");
-                    uid_string = malloc(uid_buffer_max);
-                    snprintf(uid_string, uid_buffer_max, "#%u", sub_cred.uid);
-                    char *root_argv[] = {
-                        "sudo", "-u", uid_string, base_argv[0], base_argv[1], base_argv[2]
-                    };
-                    argv = root_argv;
-                    exec_file = "sudo";
-                }
-
-                execvp(exec_file, argv);
-                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
-                _exit(127);
-            }
             int32_t makepkg_status_info;
-            if (waitpid(pid, &makepkg_status_info, 0) < 0) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for makepkg command: %s\n", strerror(errno));
+            char *uid_string = NULL;
+            char *base_argv[] = {
+                "makepkg", "-sf", NULL
+            };
+            char **argv = base_argv;
+            if (uid == 0) {
+                chown(".", sub_cred.uid, sub_cred.gid);
+                uint8_t uid_buffer_max = sizeof("#4294967295");
+                uid_string = malloc(uid_buffer_max);
+                snprintf(uid_string, uid_buffer_max, "#%u", sub_cred.uid);
+                char *root_argv[] = {
+                    "sudo", "-u", uid_string, base_argv[0], base_argv[1], base_argv[2]
+                };
+                argv = root_argv;
+            }
+            int rc_status;
+            if ((rc_status = run_command(argv, &makepkg_status_info, 0))) {
                 aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
+                for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
+                    free(dep_install_args[idx]);
+                }
+                free(dep_install_args);
                 free(built_dep_bases);
                 free(found_pkg_names);
                 cJSON_Delete(required_dependencies);
                 cJSON_Delete(depends_response_body);
                 aur_pkg_info_array_free(pkgs);
                 cJSON_Delete(response_body);
-                for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
-                    free(dep_install_args[idx]);
-                }
-                free(dep_install_args);
-                return 4;
+                return rc_status;
             }
             int makepkg_status = WEXITSTATUS(makepkg_status_info);
-            if (makepkg_status || WIFSIGNALED(makepkg_status_info)) {
-                int return_code = 0;
-                if (WIFSIGNALED(makepkg_status_info)) {
-                    if (WTERMSIG(makepkg_status_info) == SIGINT) {
-                        fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process stopped by user\n");
-                    } else {
-                        fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
-                    }
-                    return_code = 128 + WTERMSIG(makepkg_status_info);
-                }
-                if (makepkg_status) {
-                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", makepkg_status);
-                    return_code = 32+ makepkg_status;
-                }
+            if (makepkg_status) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", makepkg_status);
                 aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
                 for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
                     free(dep_install_args[idx]);
@@ -3439,7 +3401,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 cJSON_Delete(depends_response_body);
                 aur_pkg_info_array_free(pkgs);
                 cJSON_Delete(response_body);
-                return return_code;
+                return 32+makepkg_status;
             }
             DIR *dir = opendir("./");
             if (!dir) { 
@@ -3530,9 +3492,9 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         
         if (dep_install_args_len-non_dyn_dep_install_args) {
             printf("Installing \x1b[1m%d\x1b[0m dependencies...\n", dependency_install_count);
-            pid_t pid = fork();
-            if (pid < 0) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
+            int32_t dep_install_info;
+            int rc_status;
+            if ((rc_status = run_command(dep_install_args, &dep_install_info, 0))) {
                 aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
                 for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
                     free(dep_install_args[idx]);
@@ -3544,44 +3506,11 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 cJSON_Delete(depends_response_body);
                 aur_pkg_info_array_free(pkgs);
                 cJSON_Delete(response_body);
-                return 64+errno;
-            }
-            if (pid == 0) {
-                execvp("sudo", dep_install_args);
-                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Pacman failed to run: %s\n", strerror(errno));
-                _exit(127);
-            }
-            for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
-                free(dep_install_args[idx]);
-            }
-            free(dep_install_args);
-            int32_t dep_install_info;
-            if (waitpid(pid, &dep_install_info, 0) < 0) {
-                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Waiting for install process failed: %s\n", strerror(errno));
-                aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-                free(built_dep_bases);
-                free(found_pkg_names);
-                cJSON_Delete(required_dependencies);
-                cJSON_Delete(depends_response_body);
-                aur_pkg_info_array_free(pkgs);
-                cJSON_Delete(response_body);
-                return 64+errno;
+                return rc_status;
             }
             int dep_install_status = WEXITSTATUS(dep_install_info);
-            if (dep_install_status || WIFSIGNALED(dep_install_info)) {
-                int return_code = 0;
-                if (WIFSIGNALED(dep_install_info)) {
-                    if (WTERMSIG(dep_install_info) == SIGINT) {
-                        fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process stopped by user\n");
-                    } else {
-                        fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process exited due to signal %d: %s\n", WTERMSIG(dep_install_info), strsignal(WTERMSIG(dep_install_info)));
-                    }
-                    return_code = 128 + WTERMSIG(dep_install_info);
-                }
-                if (dep_install_status) {
-                    fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: pacman error %d\n", dep_install_status);
-                    return_code = 64;
-                }
+            if (dep_install_status) {
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: pacman error %d\n", dep_install_status);
                 aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
                 free(built_dep_bases);
                 free(found_pkg_names);
@@ -3589,7 +3518,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 cJSON_Delete(depends_response_body);
                 aur_pkg_info_array_free(pkgs);
                 cJSON_Delete(response_body);
-                return return_code;
+                return 64+dep_install_status;
             }
         } else {
             for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
@@ -3637,57 +3566,29 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         timestamp_3 = time_spec.tv_sec;
         chdir(pkg_info->base);
-        pid_t pid = fork();
-        if (pid < 0) {
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
-            loop_status = 4;
-            break;
-        }
-        if (pid == 0) {
-            char *uid_string = NULL;
-            char *exec_file = "makepkg";
-            char *base_argv[] = {
-                "makepkg", "-sf", NULL
-            };
-            char **argv = base_argv;
-            if (uid == 0) {
-                chown(".", sub_cred.uid, sub_cred.gid);
-                uint8_t uid_buffer_max = sizeof("#4294967295");
-                uid_string = malloc(uid_buffer_max);
-                snprintf(uid_string, uid_buffer_max, "#%u", sub_cred.uid);
-                char *root_argv[] = {
-                    "sudo", "-u", uid_string, base_argv[0], base_argv[1], base_argv[2]
-                };
-                argv = root_argv;
-                exec_file = "sudo";
-            }
-
-            execvp(exec_file, argv);
-            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
-            _exit(127);
-        }
         int32_t makepkg_status_info;
-        if (waitpid(pid, &makepkg_status_info, 0) < 0) {
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for makepkg command: %s\n", strerror(errno));
-            loop_status = 4;
+        char *uid_string = NULL;
+        char *base_argv[] = {
+            "makepkg", "-sf", NULL
+        };
+        char **argv = base_argv;
+        if (uid == 0) {
+            chown(".", sub_cred.uid, sub_cred.gid);
+            uint8_t uid_buffer_max = sizeof("#4294967295");
+            uid_string = malloc(uid_buffer_max);
+            snprintf(uid_string, uid_buffer_max, "#%u", sub_cred.uid);
+            char *root_argv[] = {
+                "sudo", "-u", uid_string, base_argv[0], base_argv[1], base_argv[2]
+            };
+            argv = root_argv;
+        }
+        if ((loop_status = run_command(argv, &makepkg_status_info, 0))) {
             break;
         }
         int makepkg_status = WEXITSTATUS(makepkg_status_info);
-        if (makepkg_status || WIFSIGNALED(makepkg_status_info)) {
-            int return_code = 0;
-            if (WIFSIGNALED(makepkg_status_info)) {
-                if (WTERMSIG(makepkg_status_info) == SIGINT) {
-                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process stopped by user\n");
-                } else {
-                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Makepkg process exited due to signal %d: %s\n", WTERMSIG(makepkg_status_info), strsignal(WTERMSIG(makepkg_status_info)));
-                }
-                return_code = 128 + WTERMSIG(makepkg_status_info);
-            }
-            if (makepkg_status) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", makepkg_status);
-                return_code = 32+ makepkg_status;
-            }
-            loop_status = return_code;
+        if (makepkg_status) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", makepkg_status);
+            loop_status = 32+makepkg_status;
             break;
         }
         DIR *dir = opendir("./");
@@ -3774,9 +3675,9 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     
     if (install_args_len-non_dyn_install_args) {
         printf("Installing \x1b[1m%d\x1b[0m packages...\n", install_count);
-        pid_t pid = fork();
-        if (pid < 0) {
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
+        int32_t install_info;
+        int rc_status;
+        if ((rc_status = run_command(install_args, &install_info, 0))) {
             aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
             for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
                 free(install_args[idx]);
@@ -3784,51 +3685,26 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             free(install_args);
             free(found_pkg_names);
             cJSON_Delete(response_body);
-            return 64+errno;
-        }
-        if (pid == 0) {
-            execvp("sudo", install_args);
-            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Pacman failed to run: %s\n", strerror(errno));
-            _exit(127);
-        }
-        for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
-            free(install_args[idx]);
-        }
-        free(install_args);
-        int32_t install_info;
-        if (waitpid(pid, &install_info, 0) < 0) {
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Waiting for install process failed: %s\n", strerror(errno));
-            aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
-            free(found_pkg_names);
-            cJSON_Delete(response_body);
-            return 64+errno;
+            return rc_status;
         }
         int install_status = WEXITSTATUS(install_info);
-        if (install_status || WIFSIGNALED(install_info)) {
-            int return_code = 0;
-            if (WIFSIGNALED(install_info)) {
-                if (WTERMSIG(install_info) == SIGINT) {
-                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process stopped by user\n");
-                } else {
-                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Install process exited due to signal %d: %s\n", WTERMSIG(install_info), strsignal(WTERMSIG(install_info)));
-                }
-                return_code = 128 + WTERMSIG(install_info);
-            }
-            if (install_status) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: pacman error %d\n", install_status);
-                return_code = 64;
-            }
+        if (install_status) {
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: pacman error %d\n", install_status);
             aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
             free(found_pkg_names);
             cJSON_Delete(response_body);
-            return return_code;
+            for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
+                free(install_args[idx]);
+            }
+            free(install_args);
+            return 64;
         }
-    } else {
-        for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
-            free(install_args[idx]);
-        }
-        free(install_args);
     }
+    for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
+        free(install_args[idx]);
+    }
+    free(install_args);
+    
 
     if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
@@ -4144,47 +4020,19 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         );
         if (upgrade_keyring) {
             printf("Attempting to upgrade archlinux-keyring first to prevent signature errors...\n");
-            pid_t pid = fork();
-            if (pid < 0) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
-                cJSON_Delete(response_body);
-                installed_pkg_info_array_free(installed_pkgs, install_count);
-                cJSON_Delete(package_data);
-                free(needs_update);
-                return 64+errno;
-            }
-            if (pid == 0) {
-                char *argv[] = {
+            int32_t keyring_status;
+            char *argv[] = {
                     "sudo", "pacman", "-Sy", "archlinux-keyring", NULL
                 };
-                execvp("sudo", argv);
-                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Pacman failed to run: %s\n", strerror(errno));
-                _exit(127);
-            }
-            int32_t keyring_status;
-            if (waitpid(pid, &keyring_status, 0) < 0) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for pacman: %s\n", strerror(errno));
+            int rc_status;
+            if ((rc_status = run_command(argv, &keyring_status, 0))) {
                 cJSON_Delete(response_body);
                 installed_pkg_info_array_free(installed_pkgs, install_count);
                 cJSON_Delete(package_data);
                 free(needs_update);
-                return 64+errno;
+                return rc_status;
             }
             int keyring_failed = WEXITSTATUS(keyring_status);
-            if (WIFSIGNALED(keyring_status)) {
-                if (WTERMSIG(keyring_status) == SIGINT) {
-                    fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Pacman stopped by user\n");
-                } else {
-                    fprintf(
-                        stderr, "\x1b[1;33mStopping\x1b[0m: Pacman exited due to signal %d: %s\n", 
-                        WTERMSIG(keyring_status), strsignal(WTERMSIG(keyring_status)));
-                }
-                cJSON_Delete(response_body);
-                installed_pkg_info_array_free(installed_pkgs, install_count);
-                cJSON_Delete(package_data);
-                free(needs_update);
-                return 128+WTERMSIG(keyring_status);
-            }
             if (keyring_failed) {
                 fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Pacman failed with exit code %d\n", keyring_failed);
                 cJSON_Delete(response_body);
@@ -4200,46 +4048,78 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 "system in a broken state! So please let it run or do it manually\n"
             );
         }
-        pid_t pid = fork();
-        if (pid < 0) {
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
-            cJSON_Delete(package_data);
-            cJSON_Delete(response_body);
-            installed_pkg_info_array_free(installed_pkgs, install_count);
-            free(needs_update);
-            return 64+errno;
-        }
-        if (pid == 0) {
-            char *argv[] = {
-                "sudo", "pacman", "-Syu", NULL
+        int32_t which_status;
+        char *argv[] = {
+                "which", "informant", NULL
             };
-            execvp("sudo", argv);
-            fprintf(stderr, "\x1b[1;31mError\x1b[0m: pacman failed to run: %s\n", strerror(errno));
-            _exit(127);
-        }
-        int32_t pacman_status;
-        if (waitpid(pid, &pacman_status, 0) < 0) {
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for pacman: %s\n", strerror(errno));
+        int rc_status;
+        if ((rc_status = run_command(argv, &which_status, 0))) {
             cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             installed_pkg_info_array_free(installed_pkgs, install_count);
             free(needs_update);
-            return 64+errno;
+            return rc_status;
         }
-        int pacman_failed = WEXITSTATUS(pacman_status);
-        if (WIFSIGNALED(pacman_status)) {
-            if (WTERMSIG(pacman_status) == SIGINT) {
-                fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Pacman stopped by user\n");
+        int no_informant = WEXITSTATUS(which_status);
+        if (WIFSIGNALED(which_status)) {
+            if (WTERMSIG(which_status) == SIGINT) {
+                fprintf(stderr, "\x1b[1;33mStopping\x1b[0m: Exit requested by user\n");
             } else {
                 fprintf(
-                    stderr, "\x1b[1;33mStopping\x1b[0m: Pacman exited due to signal %d: %s\n", 
-                    WTERMSIG(pacman_status), strsignal(WTERMSIG(pacman_status)));
-            }cJSON_Delete(response_body);
+                    stderr, "\x1b[1;33mStopping\x1b[0m: Got signal %d: %s\n", 
+                    WTERMSIG(which_status), strsignal(WTERMSIG(which_status)));
+            }
+            cJSON_Delete(response_body);
             installed_pkg_info_array_free(installed_pkgs, install_count);
             cJSON_Delete(package_data);
             free(needs_update);
-            return 128+WTERMSIG(pacman_status);
+            return 128+WTERMSIG(which_status);
         }
+        if (!no_informant) {
+            printf("Informant detected\n");
+            int32_t informant_status;
+            char *informant_argv[] = {
+                "informant", "check"
+            };
+            if ((rc_status = run_command(informant_argv, &informant_status, 0))) {
+                cJSON_Delete(package_data);
+                cJSON_Delete(response_body);
+                installed_pkg_info_array_free(installed_pkgs, install_count);
+                free(needs_update);
+                return rc_status;
+            }
+            int unread_news_items = WEXITSTATUS(informant_status);
+            if (unread_news_items) {
+                printf("Unread new items! Reading...");
+                int32_t informant_status;
+                char *informant_argv[] = {
+                    "informant", "read"
+                };
+                if ((rc_status = run_command(informant_argv, &informant_status, 0))) {
+                    cJSON_Delete(package_data);
+                    cJSON_Delete(response_body);
+                    installed_pkg_info_array_free(installed_pkgs, install_count);
+                    free(needs_update);
+                    return rc_status;
+                }
+                int read_failed = WEXITSTATUS(informant_status);
+                if (read_failed) {
+                    fprintf(stderr, "\x1b[1;31mError\x1b[0m: informant read failed with exit code %d\n", read_failed);
+                }
+            }
+        }
+        int32_t pacman_status;
+        char *syu_argv[] = {
+            "sudo", "pacman", "-Syu", NULL
+        };
+        if ((rc_status = run_command(syu_argv, &pacman_status, 0))) {
+            cJSON_Delete(package_data);
+            cJSON_Delete(response_body);
+            installed_pkg_info_array_free(installed_pkgs, install_count);
+            free(needs_update);
+            return rc_status;
+        }
+        int pacman_failed = WEXITSTATUS(pacman_status);
         if (pacman_failed) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Pacman failed with exit code %d\n", pacman_failed);
             cJSON_Delete(package_data);
