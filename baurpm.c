@@ -4166,8 +4166,10 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
         return 8;
     }
-    duration_elapsed = time_spec.tv_sec-primary_timestamp;
-    printf("Full Upgrade Completed in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+    if (!return_code) {
+        duration_elapsed = time_spec.tv_sec-primary_timestamp;
+        printf("Full Upgrade Completed in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+    }
 
     if (ignoring_packages) {
         aop_full_free((void **)arg_list, arg_list_len, free, free);
