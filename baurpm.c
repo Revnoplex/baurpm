@@ -355,7 +355,7 @@ int chownr_cb(const char *path, const struct stat *stat_info, int typeflag, stru
     (void)(typeflag);
     (void)(ftwbuf);
     int rm_status;
-    if ((rm_status = chown(path, chownr_args->uid, chownr_args->gid))) {
+    if ((rm_status = lchown(path, chownr_args->uid, chownr_args->gid))) {
         fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to chown %s: %s\n", path, strerror(errno));
     }
     return rm_status;
