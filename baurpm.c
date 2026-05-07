@@ -4079,7 +4079,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             printf("Informant detected\n");
             int32_t informant_status;
             char *informant_argv[] = {
-                "informant", "check"
+                "informant", "check", NULL
             };
             if ((rc_status = run_command(informant_argv, &informant_status, 0))) {
                 cJSON_Delete(package_data);
@@ -4093,7 +4093,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 printf("Unread new items! Reading...");
                 int32_t informant_status;
                 char *informant_argv[] = {
-                    "informant", "read"
+                    "informant", "read", NULL
                 };
                 if ((rc_status = run_command(informant_argv, &informant_status, 0))) {
                     cJSON_Delete(package_data);
