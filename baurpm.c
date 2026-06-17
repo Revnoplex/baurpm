@@ -4090,7 +4090,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             }
             int unread_news_items = WEXITSTATUS(informant_status);
             if (unread_news_items) {
-                printf("Unread new items! Reading...");
+                printf("Unread new items! Reading...\n");
                 int32_t informant_status;
                 char *informant_argv[] = {
                     "informant", "read", NULL
