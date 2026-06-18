@@ -3477,7 +3477,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 return 8;
             }
             duration_elapsed = time_spec.tv_sec-timestamp_3;
-            printf("Finished making %s in %02lu:%02lu:%02lu\n", pkg_base->valuestring, duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+            printf("Finished making %s in %02lu:%02lu:%02lu\n", pkg_base->valuestring, duration_elapsed / 3600, (duration_elapsed % 3600) / 60, duration_elapsed % 60);
         }
         if (required_dependencies_count > 0) {
             if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
@@ -3485,7 +3485,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 return 8;
             }
             duration_elapsed = time_spec.tv_sec-timestamp_2;
-            printf("Finished making dependencies in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+            printf("Finished making dependencies in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, (duration_elapsed % 3600) / 60, duration_elapsed % 60);
         }
         dep_install_args[dep_install_args_len] = NULL;
         
@@ -3649,7 +3649,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             break;
         }
         duration_elapsed = time_spec.tv_sec-timestamp_3;
-        printf("Finished making %s in %02lu:%02lu:%02lu\n", pkg_info->base, duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+        printf("Finished making %s in %02lu:%02lu:%02lu\n", pkg_info->base, duration_elapsed / 3600, (duration_elapsed % 3600) / 60, duration_elapsed % 60);
     }
     aur_pkg_info_sub_array_free(bases);
     if (loop_status != 0) {
@@ -3669,7 +3669,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         return 8;
     }
     duration_elapsed = time_spec.tv_sec-timestamp_2;
-    printf("Finished making packages in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+    printf("Finished making packages in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, (duration_elapsed % 3600) / 60, duration_elapsed % 60);
     aur_pkg_info_array_free(pkgs);
     install_args[install_args_len] = NULL;
     
@@ -3711,7 +3711,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         return 8;
     }
     duration_elapsed = time_spec.tv_sec-timestamp_1;
-    printf("Installation Completed in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+    printf("Installation Completed in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, (duration_elapsed % 3600) / 60, duration_elapsed % 60);
 
     aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
     free(found_pkg_names);
@@ -4133,7 +4133,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             return 8;
         }
         duration_elapsed = time_spec.tv_sec-secondary_timestamp;
-        printf("Completed pacman -Syu in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+        printf("Completed pacman -Syu in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, (duration_elapsed % 3600) / 60, duration_elapsed % 60);
     }
     char **arg_list = NULL;
     int32_t arg_list_len;
@@ -4168,7 +4168,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     }
     if (!return_code) {
         duration_elapsed = time_spec.tv_sec-primary_timestamp;
-        printf("Full Upgrade Completed in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, duration_elapsed / 60, duration_elapsed % 60);
+        printf("Full Upgrade Completed in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, (duration_elapsed % 3600) / 60, duration_elapsed % 60);
     }
 
     if (ignoring_packages) {
