@@ -1684,7 +1684,7 @@ uint32_t git_pull_pkg(char *base_name, int32_t keep_existing) {
 	fetch_opts.callbacks.transfer_progress = &fetch_progress;
 	fetch_opts.callbacks.payload = &pd;
 
-    // equivalent of git clean -dfxn
+    // equivalent of git clean -dfx
     if (!keep_existing) {
         git_status_options status_opts;
         
