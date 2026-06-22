@@ -2785,7 +2785,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 base_url[idx] = pkg_info->url_path[suffix_index+idx-base_length-slash_index-1];
             }
         }
-        if (!base_url) {
+        if (!(pkg_info->url_path || base_url)) {
             fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to extract url from package info\n");
             return_code = 1;
             break;
