@@ -488,7 +488,7 @@ static int copy_data(struct archive *ar, struct archive *aw) {
 	}
 }
 
-int run_command(char *argv[], int *command_status, int no_stop) {
+int run_command(char *argv[], int *command_status, int no_stop, int redirects[3]) {
     char *lower_levels[] = {
         "\x1b[1;33mWarning\x1b[0m:", "\x1b[1;31mError\x1b[0m", "\x1b[1;31mError\x1b[0m"
     };
@@ -505,6 +505,19 @@ int run_command(char *argv[], int *command_status, int no_stop) {
         return 4;
     }
     if (pid == 0) {
+        if (redirects) {
+            for (int idx = 0; idx < 3; idx++) {
+                if (redirects[idx]) {
+                    dup2(redirects[idx], idx);
+                }
+            }
+            // use second loop for closing in case the same fd is used more than once
+            for (int idx = 0; idx < 3; idx++) {
+                if (redirects[idx]) {
+                    close(redirects[idx]);
+                }
+            }
+        }
         execvp(argv[0], argv);
         fprintf(stderr, "%s: %s failed to run: %s\n", levels[1], argv[0], strerror(errno));
         _exit(127);
@@ -1589,7 +1602,71 @@ uint32_t git_clone_pkg(char *base_name) {
 	    return return_code;
 }
 
-uint32_t git_pull_pkg(char *base_name, int32_t keep_existing) {
+int diff_print_cb(
+    const git_diff_delta *delta,
+    const git_diff_hunk *hunk,
+    const git_diff_line *line,
+    void *payload)
+{
+    FILE *fp = payload ? payload : stdout;
+    int error;
+
+    (void)(delta);
+    (void)(hunk);
+
+    char *ansi_style = NULL;
+
+    switch (line->origin) {
+        case GIT_DIFF_LINE_ADDITION:
+            ansi_style = "\x1b[32m";
+            break;
+        case GIT_DIFF_LINE_DELETION:
+            ansi_style = "\x1b[31m";
+            break;
+        case GIT_DIFF_LINE_FILE_HDR:
+            ansi_style = "\x1b[1m";
+            break;
+        case GIT_DIFF_LINE_HUNK_HDR:
+            ansi_style = "\x1b[36m";
+    }
+
+    if (ansi_style != NULL) {
+        fprintf(fp, "%s", ansi_style);
+    }
+
+    if (line->origin == GIT_DIFF_LINE_CONTEXT ||
+        line->origin == GIT_DIFF_LINE_ADDITION ||
+        line->origin == GIT_DIFF_LINE_DELETION) {
+        while ((error = fputc(line->origin, fp)) == EINTR)
+            continue;
+        if (error == EOF) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to print line origin: fputc error %d: %s\n", errno, strerror(errno));
+            return -1;
+        }
+    }
+
+    int at_count = 0;
+
+    for (size_t idx = 0; idx < line->content_len; idx++) {
+        if (fputc(line->content[idx], fp) == EOF) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to print line content: fputc error %d: %s\n", errno, strerror(errno));
+            return -1;
+        }
+        if (line->origin == GIT_DIFF_LINE_HUNK_HDR && line->content[idx] == '@' && at_count != -1) {
+            at_count++;
+        }
+        if (at_count == 4) {
+            fprintf(fp, "\x1b[0m");
+            at_count = -1;
+        }
+    }
+    if (ansi_style != NULL && at_count != -1) {
+        fprintf(fp, "\x1b[0m");
+    }
+    return 0;
+}
+
+uint32_t git_pull_pkg(char *base_name, int32_t keep_existing, int32_t skip_review) {
     uint32_t return_code = 0;
     git_remote *remote;
     git_reference *head = NULL;
@@ -1603,6 +1680,15 @@ uint32_t git_pull_pkg(char *base_name, int32_t keep_existing) {
 	git_repository_state_t state;
 	git_merge_analysis_t analysis;
 	git_merge_preference_t preference;
+    git_object *commit_head_obj = NULL;
+    git_commit *commit_head = NULL;
+    git_tree *head_tree = NULL;
+    git_oid fresh_upstream_oid;
+    git_commit *commit_upstream = NULL;
+    git_tree *upstream_tree = NULL;
+    git_diff *diff;
+    git_diff_options diff_opts;
+
     if (git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION) != 0) {
         const git_error *err = git_error_last();
         if (err) {
@@ -1753,6 +1839,158 @@ uint32_t git_pull_pkg(char *base_name, int32_t keep_existing) {
         goto cleanup;
     }
 
+    if (git_reference_peel(&commit_head_obj, head, GIT_OBJECT_COMMIT) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get HEAD commit object: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to get HEAD commit object\n");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    if (git_commit_lookup(&commit_head, repo, git_object_id(commit_head_obj)) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD commit: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD commit object\n");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    if (git_commit_tree(&head_tree, commit_head) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD commit: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD commit object\n");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    if (git_reference_name_to_id(&fresh_upstream_oid, repo, git_reference_name(upstream)) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(
+                stderr,
+                "\x1b[1;31mError\x1b[0m: Failed to associate an oid with the ref name %s: libgit2 error %d: %s\n",
+                git_reference_name(upstream), err->klass, err->message
+            );
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to associate an oid with the ref name %s\n", git_reference_name(upstream));
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    if (git_commit_lookup(&commit_upstream, repo, &fresh_upstream_oid) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD commit: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD commit object\n");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    if (git_commit_tree(&upstream_tree, commit_upstream) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD commit: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to lookup HEAD commit object\n");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    if (git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION) != 0) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git diff options: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to initialise git diff options");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    if(git_diff_tree_to_tree(&diff, repo, head_tree, upstream_tree, &diff_opts)) {
+        const git_error *err = git_error_last();
+        if (err) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to generate diff: libgit2 error %d: %s\n", err->klass, err->message);
+        } else {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to generate diff\n");
+        }
+        return_code = 4;
+        goto cleanup;
+    }
+
+    size_t n_deltas = git_diff_num_deltas(diff);
+
+    if (!skip_review && n_deltas == 0) {
+        printf("No changes detected for %s since last git pull\n", base_name);
+    }
+
+    if (!skip_review && n_deltas) {
+        printf("%zu file(s) for %s were modified since the last git pull:\n    ", n_deltas, base_name);
+
+        for (size_t idx = 0; idx < n_deltas; idx++) {
+            const git_diff_delta *delta = git_diff_get_delta(diff, idx);
+            printf("%s ", delta->new_file.path);
+        }
+        printf("\n");
+
+        printf("Press Enter to continue and view diffs");
+        getchar();
+        printf("\n");
+
+        int pipefd[2];
+        pipe(pipefd);
+
+        FILE *write_fp = fdopen(pipefd[1], "w");
+        if (write_fp == NULL) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to open file descriptor: fdopen error %d: %s\n", errno, strerror(errno));
+            close(pipefd[0]);
+            close(pipefd[1]);
+            return_code = 3;
+            goto cleanup;
+        }
+
+        if (git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, diff_print_cb, write_fp) != 0) {
+            const git_error *err = git_error_last();
+            if (err) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to print diff: libgit2 error %d: %s\n", err->klass, err->message);
+            } else {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to print diff\n");
+            }
+            return_code = 4;
+            goto cleanup;
+        }
+
+        fclose(write_fp);
+
+        int32_t less_status;
+        char *argv[] = {
+            "less", "-FRX", NULL
+        };
+        int redirects[3] = {
+            pipefd[0], 0, 0
+        };
+
+        run_command(argv, &less_status, 1, redirects);
+
+        int less_failed = WEXITSTATUS(less_status);
+        if (less_failed) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed with exit code %d\n", less_failed);
+        }
+    }
+
     const git_indexer_progress *stats = git_remote_stats(remote);
     if (stats != NULL && (received_bs = byte_units(stats->received_bytes)) != NULL) {
         if (stats->local_objects > 0) {
@@ -1873,6 +2111,12 @@ uint32_t git_pull_pkg(char *base_name, int32_t keep_existing) {
 	}
 
     cleanup:
+        git_object_free(commit_head_obj);
+        git_commit_free(commit_head);
+        git_tree_free(head_tree);
+        git_commit_free(commit_upstream);
+        git_tree_free(upstream_tree);
+        git_diff_free(diff);
         git_reference_free(head);
         git_reference_free(upstream);
         git_buf_dispose(&remote_name);
@@ -1886,7 +2130,7 @@ uint32_t git_pull_pkg(char *base_name, int32_t keep_existing) {
         return return_code;
 }
 
-uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
+uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing, int32_t skip_review) {
     int return_code = 0;
     char **downloaded_bases = malloc(pkgc * sizeof(void *));
     if (downloaded_bases == NULL) {
@@ -1979,7 +2223,7 @@ uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing) {
         switch (dir_status) {
         case GIT_REPO:
             chownr(pkg_base->valuestring, uid, getgid());
-            return_code = git_pull_pkg(pkg_base->valuestring, keep_existing);
+            return_code = git_pull_pkg(pkg_base->valuestring, keep_existing, skip_review);
             break;
 
         case NOT_PATH:
@@ -2607,7 +2851,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             "less", "PKGBUILD", NULL
         };
         int rc_status;
-        if ((rc_status = run_command(argv, &less_status, 1))) {
+        if ((rc_status = run_command(argv, &less_status, 1, NULL))) {
             continue;
         }
         int less_failed = WEXITSTATUS(less_status);
@@ -2786,7 +3030,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     }
     printf("Downloading packages...\n");
     // uint32_t download_and_extraction_failed = download_and_extract_pkgs(found_packages, found_pkg_arrc, keep_existing);
-    uint32_t download_and_extraction_failed = git_download_pkgs(found_packages, pkgs->size, keep_existing);
+    uint32_t download_and_extraction_failed = git_download_pkgs(found_packages, pkgs->size, keep_existing, skip_review);
     if (download_and_extraction_failed) {
         free(found_pkg_names);
         aur_pkg_info_array_free(pkgs);
@@ -2873,7 +3117,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             char *argv[] = {
                 "less", "PKGBUILD", NULL
             };
-            run_command(argv, &less_status, 1);
+            run_command(argv, &less_status, 1, NULL);
             int less_failed = WEXITSTATUS(less_status);
             if (less_failed) {
                 fprintf(stderr, "\x1b[1;31mError\x1b[0m: less command failed with exit code %d\n", less_failed);
@@ -3301,7 +3545,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         if (required_dependencies_count > 0) {
             printf("Downloading dependencies...\n");
             // download_and_extraction_failed = download_and_extract_pkgs(required_dependencies, required_dependencies_count, keep_existing);
-            download_and_extraction_failed = git_download_pkgs(required_dependencies, required_dependencies_count, keep_existing);
+            download_and_extraction_failed = git_download_pkgs(required_dependencies, required_dependencies_count, keep_existing, skip_review);
             if (download_and_extraction_failed) {
                 aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
                 free(found_pkg_names);
@@ -3373,7 +3617,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
                 argv = root_argv;
             }
             int rc_status;
-            if ((rc_status = run_command(argv, &makepkg_status_info, 0))) {
+            if ((rc_status = run_command(argv, &makepkg_status_info, 0, NULL))) {
                 aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
                 for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
                     free(dep_install_args[idx]);
@@ -3494,7 +3738,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             printf("Installing \x1b[1m%d\x1b[0m dependencies...\n", dependency_install_count);
             int32_t dep_install_info;
             int rc_status;
-            if ((rc_status = run_command(dep_install_args, &dep_install_info, 0))) {
+            if ((rc_status = run_command(dep_install_args, &dep_install_info, 0, NULL))) {
                 aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
                 for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
                     free(dep_install_args[idx]);
@@ -3582,7 +3826,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             };
             argv = root_argv;
         }
-        if ((loop_status = run_command(argv, &makepkg_status_info, 0))) {
+        if ((loop_status = run_command(argv, &makepkg_status_info, 0, NULL))) {
             break;
         }
         int makepkg_status = WEXITSTATUS(makepkg_status_info);
@@ -3677,7 +3921,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         printf("Installing \x1b[1m%d\x1b[0m packages...\n", install_count);
         int32_t install_info;
         int rc_status;
-        if ((rc_status = run_command(install_args, &install_info, 0))) {
+        if ((rc_status = run_command(install_args, &install_info, 0, NULL))) {
             aop_full_free((void **)base_dependencies, base_dependencies_amount, free, free);
             for (uint32_t idx = non_dyn_install_args; idx < install_args_len; idx++){
                 free(install_args[idx]);
@@ -4025,7 +4269,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                     "sudo", "pacman", "-Sy", "archlinux-keyring", NULL
                 };
             int rc_status;
-            if ((rc_status = run_command(argv, &keyring_status, 0))) {
+            if ((rc_status = run_command(argv, &keyring_status, 0, NULL))) {
                 cJSON_Delete(response_body);
                 installed_pkg_info_array_free(installed_pkgs, install_count);
                 cJSON_Delete(package_data);
@@ -4053,7 +4297,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 "which", "informant", NULL
             };
         int rc_status;
-        if ((rc_status = run_command(argv, &which_status, 0))) {
+        if ((rc_status = run_command(argv, &which_status, 0, NULL))) {
             cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             installed_pkg_info_array_free(installed_pkgs, install_count);
@@ -4081,7 +4325,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             char *informant_argv[] = {
                 "informant", "check", NULL
             };
-            if ((rc_status = run_command(informant_argv, &informant_status, 0))) {
+            if ((rc_status = run_command(informant_argv, &informant_status, 0, NULL))) {
                 cJSON_Delete(package_data);
                 cJSON_Delete(response_body);
                 installed_pkg_info_array_free(installed_pkgs, install_count);
@@ -4095,7 +4339,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 char *informant_argv[] = {
                     "informant", "read", NULL
                 };
-                if ((rc_status = run_command(informant_argv, &informant_status, 0))) {
+                if ((rc_status = run_command(informant_argv, &informant_status, 0, NULL))) {
                     cJSON_Delete(package_data);
                     cJSON_Delete(response_body);
                     installed_pkg_info_array_free(installed_pkgs, install_count);
@@ -4112,7 +4356,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         char *syu_argv[] = {
             "sudo", "pacman", "-Syu", NULL
         };
-        if ((rc_status = run_command(syu_argv, &pacman_status, 0))) {
+        if ((rc_status = run_command(syu_argv, &pacman_status, 0, NULL))) {
             cJSON_Delete(package_data);
             cJSON_Delete(response_body);
             installed_pkg_info_array_free(installed_pkgs, install_count);
