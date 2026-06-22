@@ -339,6 +339,18 @@ struct chownr_cb_args {
 
 static struct chownr_cb_args *chownr_args;
 
+char *error_levels[] = {
+    "\x1b[1;31mError\x1b[0m", "\x1b[1;31mFatal\x1b[0m", "\x1b[1;33mWarning\x1b[0m:", "\x1b[1;33mStopping\x1b[0m"
+};
+
+void perror_c(const char *__s, int level) {
+    fprintf(stderr, "%s: %s: %s", error_levels[level], __s, strerror(errno));
+}
+
+void perror_kw(const char *__s, const char *keyword, int level) {
+    fprintf(stderr, "%s: %s %s: %s", error_levels[level], __s, keyword, strerror(errno));
+}
+
 int rmrf_cb(const char *path, const struct stat *stat_info, int typeflag, struct FTW *ftwbuf) {
     (void)(stat_info);
     (void)(typeflag);
@@ -489,19 +501,17 @@ static int copy_data(struct archive *ar, struct archive *aw) {
 }
 
 int run_command(char *argv[], int *command_status, int no_stop, int redirects[3]) {
-    char *lower_levels[] = {
-        "\x1b[1;33mWarning\x1b[0m:", "\x1b[1;31mError\x1b[0m", "\x1b[1;31mError\x1b[0m"
-    };
-    char *higher_levels[] = {
-        "\x1b[1;33mStopping\x1b[0m", "\x1b[1;31mError\x1b[0m", "\x1b[1;31mFatal\x1b[0m"
-    };
-    char **levels = higher_levels;
+    int lower_levels[] = { 2, 0, 0 };
+    int higher_levels[] = { 3, 0, 1 };
+
+    int *levels = higher_levels;
+    
     if (no_stop) {
         levels = lower_levels;
     }
     pid_t pid = fork();
     if (pid < 0) {
-        fprintf(stderr, "%s: Error forking process: %s\n", levels[2], strerror(errno));
+        perror_c("Error forking process", levels[2]);
         return 4;
     }
     if (pid == 0) {
@@ -519,20 +529,20 @@ int run_command(char *argv[], int *command_status, int no_stop, int redirects[3]
             }
         }
         execvp(argv[0], argv);
-        fprintf(stderr, "%s: %s failed to run: %s\n", levels[1], argv[0], strerror(errno));
+        perror_kw("Failed to run", argv[0], levels[1]);
         _exit(127);
     }
     if (waitpid(pid, command_status, 0) < 0) {
-        fprintf(stderr, "%s: Error waiting for %s: %s\n", levels[2], argv[0], strerror(errno));
+        perror_kw("Error waiting for", argv[0], levels[2]);
         return 4;
     }
     if (WIFSIGNALED(*command_status)) {
         if (WTERMSIG(*command_status) == SIGINT) {
-            fprintf(stderr, "%s: %s stopped by user\n", levels[0], argv[0]);
+            perror_kw("User requested to stop", argv[0], levels[0]);
         } else {
             fprintf(
                 stderr, "%s: %s exited due to signal %d: %s\n", 
-                levels[0], argv[0], WTERMSIG(*command_status), strsignal(WTERMSIG(*command_status)));
+                error_levels[levels[0]], argv[0], WTERMSIG(*command_status), strsignal(WTERMSIG(*command_status)));
         }
         return 128+WTERMSIG(*command_status);
     }
@@ -1192,6 +1202,15 @@ char *retry_download_pkg(char *url_path, uint8_t *status) {
         retries++;
     } while (*status == 5 || *status == 4);
     return result;
+}
+
+void perror_git(const char *__s, int level) {
+    const git_error *err = git_error_last();
+    if (err) {
+        fprintf(stderr, "%s: %s: libgit2 error %d: %s\n", error_levels[level], __s, err->klass, err->message);
+    } else {
+        fprintf(stderr, "%s: %s", error_levels[level], __s);
+    }
 }
 
 char *progress_bar(uint16_t columns, char *prefix, int32_t prefix_size, char *suffix, int32_t suffix_size, uint64_t numerator, uint64_t denominator) {
