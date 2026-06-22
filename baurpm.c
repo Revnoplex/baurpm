@@ -2848,7 +2848,7 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         chdir(pkg_info->base);
         int32_t less_status;
         char *argv[] = {
-            "less", "PKGBUILD", NULL
+            "less", "-FRX", "PKGBUILD", NULL
         };
         int rc_status;
         if ((rc_status = run_command(argv, &less_status, 1, NULL))) {
@@ -3115,7 +3115,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             chdir(pkg_info->base);
             int32_t less_status;
             char *argv[] = {
-                "less", "PKGBUILD", NULL
+                "less", "-FRX", "PKGBUILD", NULL
             };
             run_command(argv, &less_status, 1, NULL);
             int less_failed = WEXITSTATUS(less_status);
