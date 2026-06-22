@@ -3173,63 +3173,36 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         int stat_status = stat(".SRCINFO", &stat_info);
         if (stat_status) {
             printf("Generating information on dependencies for package base \x1b[1m%s\x1b[0m...\n", pkg_info->base);
-            pid_t pid = fork();
-            if (pid < 0) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error forking process: %s\n", strerror(errno));
-                loop_status = 4;
-                break;
-            }
-            if (pid == 0) {
-                int fd = open(".SRCINFO", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (fd == -1) {
-                    fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to generate .SRCINFO: %s\n", strerror(errno));
-                    _exit(127);
-                }
-                dup2(fd, STDOUT_FILENO);
-                dup2(fd, STDERR_FILENO);
-                close(fd);
-                char *uid_string = NULL;
-                char *exec_file = "makepkg";
-                char *base_argv[] = {
-                    "makepkg", "--printsrcinfo", NULL
+            int32_t srcinfo_status_info;
+            char *uid_string = NULL;
+            char *base_argv[] = {
+                "makepkg", "--printsrcinfo", NULL
+            };
+            char **argv = base_argv;
+            if (uid == 0) {
+                chown(".", sub_cred.uid, sub_cred.gid);
+                uint8_t uid_buffer_max = sizeof("#4294967295");
+                uid_string = malloc(uid_buffer_max);
+                snprintf(uid_string, uid_buffer_max, "#%u", sub_cred.uid);
+                char *root_argv[] = {
+                    "sudo", "-u", uid_string, base_argv[0], base_argv[1], base_argv[2]
                 };
-                char **argv = base_argv;
-                if (uid == 0) {
-                    chown(".", sub_cred.uid, sub_cred.gid);
-                    uint8_t uid_buffer_max = sizeof("#4294967295");
-                    uid_string = malloc(uid_buffer_max);
-                    snprintf(uid_string, uid_buffer_max, "#%u", sub_cred.uid);
-                    char *root_argv[] = {
-                        "sudo", "-u", uid_string, base_argv[0], base_argv[1], base_argv[2]
-                    };
-                    argv = root_argv;
-                    exec_file = "sudo";
-                }
-
-                execvp(exec_file, argv);
-                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Makepkg command failed to run: %s\n", strerror(errno));
+                argv = root_argv;
+            }
+            int fd = open(".SRCINFO", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd == -1) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to generate .SRCINFO: %s\n", strerror(errno));
                 _exit(127);
             }
-            int32_t srcinfo_status_info;
-            if (waitpid(pid, &srcinfo_status_info, 0) < 0) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Error waiting for makepkg command: %s\n", strerror(errno));
-                loop_status = 4;
+            int redirects[3] = {
+                0, fd, fd
+            };
+            if ((loop_status = run_command(argv, &srcinfo_status_info, 0, redirects))) {
+                close(fd);
                 break;
             }
+            close(fd);
             int srcinfo_status = WEXITSTATUS(srcinfo_status_info);
-            if (srcinfo_status_info == -1) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: waitpid error -1\n");
-                loop_status = 4;
-                break;
-                
-            }
-            if (WIFSIGNALED(srcinfo_status_info)) {
-                fprintf(
-                    stderr, "\x1b[1;33mStopping\x1b[0m: makepkg exited due to signal %d: %s\n", 
-                    WTERMSIG(srcinfo_status_info), strsignal(WTERMSIG(srcinfo_status_info)));
-                loop_status = 128+WTERMSIG(srcinfo_status_info);
-                break;
-            }
             if (srcinfo_status) {
                 fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: makepkg error %d\n", srcinfo_status);
                 loop_status = 32+srcinfo_status;
