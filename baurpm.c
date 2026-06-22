@@ -1603,11 +1603,11 @@ uint32_t git_clone_pkg(char *base_name) {
 }
 
 int diff_print_cb(
-    const git_diff_delta *delta,
-    const git_diff_hunk *hunk,
-    const git_diff_line *line,
-    void *payload)
-{
+    const git_diff_delta *delta, 
+    const git_diff_hunk *hunk, 
+    const git_diff_line *line, 
+    void *payload
+) {
     FILE *fp = payload ? payload : stdout;
     int error;
 
