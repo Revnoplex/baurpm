@@ -2546,53 +2546,45 @@ int command_h(char *options, char *arguments[], int32_t arg_len, cJSON * _) {
     cJSON_Delete(_);
     (void)(options);
 
-    if (arg_len) {
-        for (uint64_t cmd_idx = 0; cmd_idx < ARRAY_SIZE(commands); cmd_idx++) {
-            if ((arguments[0][0] & 95) == commands[cmd_idx].name) {
-                char *description;
-                if (commands[cmd_idx].description != NULL) {
-                    description = commands[cmd_idx].description;
-                } else {
-                    description = "**No Description**";
-                }
-                printf("%c: %s\n", commands[cmd_idx].name, description);
-                if (commands[cmd_idx].usage != NULL) {
-                    printf(
-                        "Usage:\n    baurpm -%c%s\n", commands[cmd_idx].name, commands[cmd_idx].usage
-                    );
-                } else {
-                    printf("**No Usage**\n");
-                }
-                if (commands[cmd_idx].options[0] != NULL && commands[cmd_idx].options[0] != NULL) {
-                    printf("Options:\n");
-                    for (int32_t opt_idx = 0; commands[cmd_idx].options[opt_idx] != NULL; opt_idx++) {
-                        printf("    %s\n", commands[cmd_idx].options[opt_idx]);
-                    }
-                } else {
-                    printf("**No Options**\n");
-                }
-                break;
-            } else if (cmd_idx == 6) {
-                printf("No command by the name of %s\n", arguments[0]);
-            }
-            
-        }
-    } else {
+    if (!arg_len) {
         printf("Usage: %s [command][options] [arguments]\n", SHORT_NAME);
         printf("Executable commands:\n");
         for (uint64_t cmd_idx = 0; cmd_idx < ARRAY_SIZE(commands); cmd_idx++) {
-            char *description;
-            if (commands[cmd_idx].description != NULL) {
-                description = commands[cmd_idx].description;
-            } else {
-                description = "**No Description**";
-            }
+            char *description = commands[cmd_idx].description ? commands[cmd_idx].description : "**No Description**";
             printf("-%c\t%s\n", commands[cmd_idx].name, description);
         }
         printf("use %s -H [command-name] for help with that command\n", SHORT_NAME);
-    }
-    return 0;
 
+        return 0;
+    }
+
+    for (uint64_t cmd_idx = 0; cmd_idx < ARRAY_SIZE(commands); cmd_idx++) {
+        if ((arguments[0][0] & 95) == commands[cmd_idx].name) {
+            char *description = commands[cmd_idx].description ? commands[cmd_idx].description : "**No Description**";
+            printf("%c: %s\n", commands[cmd_idx].name, description);
+            if (commands[cmd_idx].usage != NULL) {
+                printf(
+                    "Usage:\n    baurpm -%c%s\n", commands[cmd_idx].name, commands[cmd_idx].usage
+                );
+            } else {
+                printf("**No Usage**\n");
+            }
+            if (commands[cmd_idx].options[0] != NULL) {
+                printf("Options:\n");
+                for (int32_t opt_idx = 0; commands[cmd_idx].options[opt_idx] != NULL; opt_idx++) {
+                    printf("    %s\n", commands[cmd_idx].options[opt_idx]);
+                }
+            } else {
+                printf("**No Options**\n");
+            }
+            break;
+        } else if (cmd_idx == ARRAY_SIZE(commands) - 1) {
+            printf("No command by the name of %s\n", arguments[0]);
+        }
+        
+    }
+
+    return 0;
 }
 
 int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
