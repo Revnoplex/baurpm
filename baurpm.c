@@ -2744,108 +2744,19 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
             continue;
         }
-        char *base_url = NULL;
-        if (different_base) {
-            uint32_t slash_index = 0;
-            uint32_t suffix_length = 0;
-            uint32_t suffix_index = 0;
-            uint8_t traversed = 0;
-            for (uint32_t idx = 0;;idx++) {
-                if (pkg_info->url_path[idx] == '/') {
-                    slash_index = idx;
-                }
-                if (suffix_length) {
-                    suffix_length++;
-                }
-                if (pkg_info->url_path[idx] == '.' && traversed && !suffix_length) {
-                    suffix_index = idx;
-                    suffix_length++;
-                }
-                if (pkg_info->url_path[idx] == '\0' && !traversed) {
-                    idx = slash_index;
-                    traversed = 1;
-                }
-                if (pkg_info->url_path[idx] == '\0' && traversed) {
-                    break;
-                }
-            }
-            uint32_t base_length;
-            for (base_length = 0; pkg_info->base[base_length] != '\0'; base_length++);
-            uint32_t base_url_length = slash_index+1 + base_length + suffix_length;
-            base_url = malloc(base_url_length);
-            for (uint32_t idx = 0; idx < base_url_length; idx++) {
-                if (idx <= slash_index) {
-                    base_url[idx] = pkg_info->url_path[idx];
-                    continue;
-                }
-                if (idx <= slash_index+base_length) {
-                    base_url[idx] = pkg_info->base[idx-slash_index-1];
-                    continue;
-                }
-                base_url[idx] = pkg_info->url_path[suffix_index+idx-base_length-slash_index-1];
-            }
-        }
-        if (!(pkg_info->url_path || base_url)) {
-            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to extract url from package info\n");
-            return_code = 1;
+        printf("Downloading %s...\n", pkg_info->base);
+        cJSON *singular_pkg = cJSON_CreateArray();
+        cJSON_AddItemReferenceToArray(singular_pkg, package);
+        
+        if ((return_code = git_download_pkgs(singular_pkg, 1, 0, 0)) != 0) {
             break;
         }
-        uint8_t download_status;
-        char *provider_url = base_url ? base_url : pkg_info->url_path;
-        char *download_path = retry_download_pkg(provider_url, &download_status);
-        if (base_url) {
-            free(base_url);
-        }
-        if (download_status) {
-            if (*download_path) {
-                free(download_path);
-            }
-            return_code = download_status;
-            break;
-        }
-        if (!*download_path) {
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
-            return_code = 6;
-            break;
-        }
-        uid_t uid = getuid();
-        uid_t sub_uid = uid;
-        SubCredentials sub_cred = {0, 0};
-        if (uid == 0) {
-            sub_cred = get_sub_credentials();
-            if (sub_cred.uid == 0 || sub_cred.gid == 0) {
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Unable to find non-root credentials to run as\n");
-                return 10;
-            }
-            sub_uid = sub_cred.uid;
-        }
-        struct passwd* pwd = getpwuid(sub_uid);
-
-        if (!pwd) {
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not get home directory");
-            free(download_path);
-            return_code = 3;
-            break;
-        }
-        uint32_t hdirc;
-        for (hdirc = 0; pwd->pw_dir[hdirc] != '\0'; hdirc++);
-        char cache_dir[] = ".cache/baurpm";
-        uint32_t dirc = hdirc + sizeof(cache_dir) + 1;
-        char *cache_dir_buffer = malloc(dirc);
-        snprintf(cache_dir_buffer, dirc, "%s/%s", pwd->pw_dir, cache_dir);
-        chdir(cache_dir_buffer);
-        free(cache_dir_buffer);
-        int extraction_failed = extract(download_path, 0);
-        free(download_path);
-        if (extraction_failed) {
-            return_code = extraction_failed;
-            break;
-        }
+        cJSON_Delete(singular_pkg);
         
         printf("Build files for \033[1m%s\033[0m are:\n     ", pkg_info->base);
         DIR *dir = opendir(pkg_info->base);
         if (!dir) { 
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list directory\n"); 
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list %s: %s\n", pkg_info->base, strerror(errno)); 
             return_code = 4;
             break;
         }
@@ -3108,7 +3019,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             DIR *dir = opendir(pkg_info->base);
             if (!dir) { 
                 printf("\n");
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list directory\n"); 
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list %s: %s\n", pkg_info->base, strerror(errno)); 
                 free(found_pkg_names);
                 aur_pkg_info_array_free(pkgs);
                 cJSON_Delete(response_body);
@@ -3642,7 +3553,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
             DIR *dir = opendir("./");
             if (!dir) { 
                 printf("\n");
-                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Could not list directory\n"); 
+                fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list ./: %s\n", strerror(errno)); 
                 for (uint32_t idx = non_dyn_dep_install_args; idx < dep_install_args_len; idx++){
                     free(dep_install_args[idx]);
                 }
@@ -3830,7 +3741,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         DIR *dir = opendir("./");
         if (!dir) { 
             printf("\n");
-            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list directory\n"); 
+            fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: could not list ./: %s\n", strerror(errno)); 
             loop_status = 4;
             break;
         }
