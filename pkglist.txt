@@ -1,6 +1,5 @@
-curl
 cjson
-libarchive
-sudo
 libgit2
-pacman
+gpgme
+less
+sudo

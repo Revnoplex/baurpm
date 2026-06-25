@@ -1,0 +1,14 @@
+# implicit (provided by base):
+glibc
+linux-api-headers
+curl
+pacman
+bash
+# all others
+cjson
+libgit2
+gpgme
+less
+sudo
+# optional
+informant
