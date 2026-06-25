@@ -3655,7 +3655,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
         int32_t which_status;
         char *argv[] = {
-                "which", "informant", NULL
+                "/bin/bash", "-c", "command -v informant", NULL
             };
         int rc_status;
         if ((rc_status = run_command(argv, &which_status, 0, NULL))) {
