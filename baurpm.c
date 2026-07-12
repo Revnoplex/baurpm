@@ -386,7 +386,7 @@ typedef struct {
     gid_t gid;
 } SubCredentials;
 
-SubCredentials get_sub_credentials() {
+SubCredentials get_sub_credentials(void) {
     SubCredentials sub = {0, 0};
     char *endptr;
     errno = 0;
@@ -499,12 +499,230 @@ int run_command(char *argv[], int *command_status, int no_stop, int redirects[3]
             perror_kw("User requested to stop", argv[0], levels[0]);
         } else {
             fprintf(
-                stderr, "%s: %s exited due to signal %d: %s\n", 
+                stderr, "%s %s exited due to signal %d: %s\n",
                 error_levels[levels[0]], argv[0], WTERMSIG(*command_status), strsignal(WTERMSIG(*command_status)));
         }
         return 128+WTERMSIG(*command_status);
     }
     return 0;
+}
+
+struct initramfs_mod_time{
+    struct timespec mod_time;
+    char *dir_name;
+};
+
+typedef struct {
+    struct initramfs_mod_time *array;
+    size_t size;
+} InitramfsModTimes;
+
+void initramfs_mod_times_free(InitramfsModTimes object) {
+    for (size_t i = 0; i < object.size; i++) {
+        free(object.array[i].dir_name);
+    }
+    free(object.array);
+    object.array = NULL;
+}
+
+InitramfsModTimes fetch_initramfs_mod_times(void) {
+    InitramfsModTimes mod_times = {NULL, 0};
+    size_t mt_chunk_size = 1;
+    size_t mt_buffer_size = mt_chunk_size;
+    char path_prefix[] = "/usr/lib/modules/";
+    DIR *dir = opendir(path_prefix);
+    if (!dir) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: could not list /usr/lib/modules/: %s\n", strerror(errno));
+        return mod_times;
+    }
+    mod_times.array = calloc(mt_buffer_size, sizeof(struct initramfs_mod_time));
+    if (mod_times.array == NULL) {
+        fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+        closedir(dir);
+        return mod_times;
+    }
+
+    struct dirent *dir_item;
+    while ((dir_item = readdir(dir)) != NULL) {
+        if (
+            (dir_item->d_name[0] == '.' && dir_item->d_name[1] == '\0')
+            ||
+            (dir_item->d_name[0] == '.' && dir_item->d_name[1] == '.' && dir_item->d_name[2] == '\0')
+        ) {
+            continue;
+        }
+        uint32_t version_name_size;
+        for (version_name_size = 0;  dir_item->d_name[version_name_size] != '\0';  version_name_size++);
+        char path_suffix[] = "/pkgbase";
+        uint32_t name_path_size = sizeof(path_prefix)-1 + version_name_size + sizeof(path_suffix);
+        char *name_path = malloc(name_path_size*sizeof(char));
+        if (name_path == NULL) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+            closedir(dir);
+            initramfs_mod_times_free(mod_times);
+            mod_times.array = NULL;
+            mod_times.size = 0;
+            return mod_times;
+        }
+        snprintf(name_path, name_path_size, "%s%s%s", path_prefix, dir_item->d_name, path_suffix);
+        FILE *name_file = fopen(name_path, "r");
+        if (name_file == NULL) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Could not open %s: %s\n", name_path, strerror(errno));
+            free(name_path);
+            continue;
+        }
+        struct stat name_file_stat;
+        if((fstat(fileno(name_file), &name_file_stat)) != 0) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Could not stat %s: %s\n", name_path, strerror(errno));
+            free(name_path);
+            fclose(name_file);
+            continue;
+        }
+        if (name_file_stat.st_size < 0) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Got unexpected st_size of less than zero!\n");
+            free(name_path);
+            fclose(name_file);
+            continue;
+        }
+        char *image_name = malloc(name_file_stat.st_size*sizeof(char)+1);
+        if (image_name == NULL) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+            free(name_path);
+            fclose(name_file);
+            closedir(dir);
+            initramfs_mod_times_free(mod_times);
+            mod_times.array = NULL;
+            mod_times.size = 0;
+            return mod_times;
+        }
+
+        size_t read_size = fread(image_name, sizeof(char), name_file_stat.st_size*sizeof(char), name_file);
+        if (read_size != name_file_stat.st_size*sizeof(char)) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to read %s: %s\n", name_path, strerror(errno));
+            free(name_path);
+            free(image_name);
+            fclose(name_file);
+            continue;
+        }
+        image_name[read_size] = '\0';
+        if (image_name[read_size - 1] == '\n') {
+            image_name[read_size - 1] = '\0';
+            read_size--;
+        }
+        int name_file_closed = fclose(name_file);
+        if (name_file_closed == -1) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Couldn't close %s: %s\n", name_path, strerror(errno));
+            free(name_path);
+            free(image_name);
+            continue;
+        }
+
+        free(name_path);
+        char mkinitcpio_prefix[] = "source /etc/mkinitcpio.d/";
+        char mkinitcpio_suffix[] = ".preset; for preset in \"${PRESETS[@]}\"; do var_name=\"${preset}_image\"; echo \"${!var_name}\"; done";
+        uint32_t mkinitcpio_path_size = sizeof(mkinitcpio_prefix)-1 + read_size + sizeof(mkinitcpio_suffix);
+        char *mkinitcpio_path = malloc(mkinitcpio_path_size*sizeof(char));
+        if (mkinitcpio_path == NULL) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+            free(image_name);
+            closedir(dir);
+            initramfs_mod_times_free(mod_times);
+            mod_times.array = NULL;
+            mod_times.size = 0;
+            return mod_times;
+        }
+        snprintf(mkinitcpio_path, mkinitcpio_path_size, "%s%s%s", mkinitcpio_prefix, image_name, mkinitcpio_suffix);
+        free(image_name);
+        int pipefd[2];
+        pipe(pipefd);
+
+        int32_t bash_status;
+        char *argv[] = {
+                "/bin/bash", "-c", mkinitcpio_path, NULL
+            };
+        int redirects[3] = {
+            0, pipefd[1], 0
+        };
+
+        int rc_status;
+        if ((rc_status = run_command(argv, &bash_status, 1, redirects))) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+            free(mkinitcpio_path);
+            closedir(dir);
+            initramfs_mod_times_free(mod_times);
+            mod_times.array = NULL;
+            mod_times.size = 0;
+            return mod_times;
+        }
+        close(pipefd[1]);
+        free(mkinitcpio_path);
+
+        int bash_failed = WEXITSTATUS(bash_status);
+        if (bash_failed) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: bash command failed with exit code %d\n", bash_failed);
+            close(pipefd[0]);
+            continue;
+        }
+
+        FILE *read_fp = fdopen(pipefd[0], "r");
+        if (read_fp == NULL) {
+            fprintf(stderr, "\x1b[1;31mError\x1b[0m: Failed to open file descriptor: fdopen error %d: %s\n", errno, strerror(errno));
+            close(pipefd[0]);
+            continue;
+        }
+        char *line_buffer = NULL;
+        size_t buffer_size = 0;
+        ssize_t line_size;
+
+        while ((line_size = getline(&line_buffer, &buffer_size, read_fp)) != -1) {
+
+            if (line_buffer[line_size - 1] == '\n') {
+                line_buffer[line_size - 1] = '\0';
+            }
+
+            struct stat initramfs_path_stat;
+            if((stat(line_buffer, &initramfs_path_stat)) != 0) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Could not stat %s: %s\n", line_buffer, strerror(errno));
+                break;
+            }
+
+            if (mod_times.size == mt_buffer_size) {
+                size_t new_buffer_size = mt_buffer_size + mt_chunk_size;
+                struct initramfs_mod_time *temp = realloc(mod_times.array, new_buffer_size*sizeof(struct initramfs_mod_time));
+                if (temp == NULL) {
+                    fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+                    free(line_buffer);
+                    fclose(read_fp);
+                    closedir(dir);
+                    initramfs_mod_times_free(mod_times);
+                    mod_times.array = NULL;
+                    mod_times.size = 0;
+                    return mod_times;
+                }
+                mt_buffer_size = new_buffer_size;
+                mod_times.array = temp;
+            }
+            mod_times.array[mod_times.size].mod_time = initramfs_path_stat.st_mtim;
+            mod_times.array[mod_times.size].dir_name = malloc(line_size);
+            if (mod_times.array[mod_times.size].dir_name == NULL) {
+                fprintf(stderr, "\x1b[1;31mError\x1b[0m: Memory allocation error: %s\n", strerror(errno));
+                free(line_buffer);
+                fclose(read_fp);
+                closedir(dir);
+                initramfs_mod_times_free(mod_times);
+                mod_times.array = NULL;
+                mod_times.size = 0;
+                return mod_times;
+            }
+            snprintf(mod_times.array[mod_times.size].dir_name, line_size, "%s", line_buffer);
+            mod_times.size++;
+        }
+        free(line_buffer);
+        fclose(read_fp);
+    }
+    closedir(dir);
+    return mod_times;
 }
 
 char **find_missing(char *superv[], int32_t superc, char *subv[], int32_t subc) {
@@ -3612,9 +3830,22 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         return 0;
     }
     printf("It is recommended to run pacman -Syu before upgrading these packages\n");
+    InitramfsModTimes before_mod_times = fetch_initramfs_mod_times();
+    if (before_mod_times.array == NULL) {
+        cJSON_Delete(response_body);
+        installed_pkg_info_array_free(installed_pkgs, install_count);
+        cJSON_Delete(package_data);
+        free(needs_update);
+        return 8;
+    }
     if (!skip_upgrade) {
         if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+            cJSON_Delete(response_body);
+            installed_pkg_info_array_free(installed_pkgs, install_count);
+            cJSON_Delete(package_data);
+            free(needs_update);
+            initramfs_mod_times_free(before_mod_times);
             return 8;
         }
         secondary_timestamp = time_spec.tv_sec;
@@ -3635,6 +3866,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 installed_pkg_info_array_free(installed_pkgs, install_count);
                 cJSON_Delete(package_data);
                 free(needs_update);
+                initramfs_mod_times_free(before_mod_times);
                 return rc_status;
             }
             int keyring_failed = WEXITSTATUS(keyring_status);
@@ -3644,6 +3876,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 installed_pkg_info_array_free(installed_pkgs, install_count);
                 cJSON_Delete(package_data);
                 free(needs_update);
+                initramfs_mod_times_free(before_mod_times);
                 return 64;
             }
             printf("Successfully upgraded archlinux-keyring\n");
@@ -3663,6 +3896,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             cJSON_Delete(response_body);
             installed_pkg_info_array_free(installed_pkgs, install_count);
             free(needs_update);
+            initramfs_mod_times_free(before_mod_times);
             return rc_status;
         }
         int no_informant = WEXITSTATUS(which_status);
@@ -3678,6 +3912,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             installed_pkg_info_array_free(installed_pkgs, install_count);
             cJSON_Delete(package_data);
             free(needs_update);
+            initramfs_mod_times_free(before_mod_times);
             return 128+WTERMSIG(which_status);
         }
         if (!no_informant) {
@@ -3691,6 +3926,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                 cJSON_Delete(response_body);
                 installed_pkg_info_array_free(installed_pkgs, install_count);
                 free(needs_update);
+                initramfs_mod_times_free(before_mod_times);
                 return rc_status;
             }
             int unread_news_items = WEXITSTATUS(informant_status);
@@ -3705,6 +3941,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
                     cJSON_Delete(response_body);
                     installed_pkg_info_array_free(installed_pkgs, install_count);
                     free(needs_update);
+                    initramfs_mod_times_free(before_mod_times);
                     return rc_status;
                 }
                 int read_failed = WEXITSTATUS(informant_status);
@@ -3722,6 +3959,7 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             cJSON_Delete(response_body);
             installed_pkg_info_array_free(installed_pkgs, install_count);
             free(needs_update);
+            initramfs_mod_times_free(before_mod_times);
             return rc_status;
         }
         int pacman_failed = WEXITSTATUS(pacman_status);
@@ -3731,10 +3969,16 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             cJSON_Delete(response_body);
             installed_pkg_info_array_free(installed_pkgs, install_count);
             free(needs_update);
+            initramfs_mod_times_free(before_mod_times);
             return 64;
         }
         if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
             fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
+            cJSON_Delete(package_data);
+            cJSON_Delete(response_body);
+            installed_pkg_info_array_free(installed_pkgs, install_count);
+            free(needs_update);
+            initramfs_mod_times_free(before_mod_times);
             return 8;
         }
         duration_elapsed = time_spec.tv_sec-secondary_timestamp;
@@ -3767,6 +4011,14 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     }
     uint8_t return_code = command_i(options, arg_list, arg_list_len, package_data);
 
+    if (ignoring_packages) {
+        aop_full_free((void **)arg_list, arg_list_len, free, free);
+    }
+    cJSON_Delete(package_data);
+    cJSON_Delete(response_body);
+    installed_pkg_info_array_free(installed_pkgs, install_count);
+    free(needs_update);
+
     if (clock_gettime(CLOCK_MONOTONIC, &time_spec) < 0) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Couldn't get timestamp: %s\n", strerror(errno));
         return 8;
@@ -3776,14 +4028,74 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         printf("Full Upgrade Completed in %02lu:%02lu:%02lu\n", duration_elapsed / 3600, (duration_elapsed % 3600) / 60, duration_elapsed % 60);
     }
 
-    if (ignoring_packages) {
-        aop_full_free((void **)arg_list, arg_list_len, free, free);
+    InitramfsModTimes after_mod_times = fetch_initramfs_mod_times();
+    if (after_mod_times.array == NULL) {
+        initramfs_mod_times_free(before_mod_times);
+        return 8;
     }
-    cJSON_Delete(package_data);
-    cJSON_Delete(response_body);
-    installed_pkg_info_array_free(installed_pkgs, install_count);
-    free(needs_update);
-    // printf("%u\n", install_count);
+    int initramfs_image_updated = 0;
+    for (size_t before_idx = 0; before_idx < before_mod_times.size; before_idx++) {
+        for (size_t after_idx = 0; after_idx < after_mod_times.size; after_idx++) {
+            int path_match = 0;
+            for (size_t str_idx = 0; before_mod_times.array[before_idx].dir_name[str_idx] == after_mod_times.array[after_idx].dir_name[str_idx]; str_idx++) {
+                if (before_mod_times.array[before_idx].dir_name[str_idx] == '\0') {
+                    path_match = 1;
+                    break;
+                }
+            }
+            if (
+                path_match && (
+                    before_mod_times.array[before_idx].mod_time.tv_sec != after_mod_times.array[before_idx].mod_time.tv_sec
+                    ||
+                    before_mod_times.array[before_idx].mod_time.tv_nsec != after_mod_times.array[before_idx].mod_time.tv_nsec
+                )
+            ) {
+                initramfs_image_updated = 1;
+            }
+        }
+    }
+
+    if (initramfs_image_updated) {
+        printf(
+            "The initramfs has been updated and you will need to reboot the system to use some new software.\n"
+            "Do you want to restart now?\n"
+            "Type \x1b[1mYes\x1b[0m to reboot. \n\x1b[1;31m"
+            "WARNING: typing Yes will reboot your computer! Any unsaved work will be lost!\x1b[0m\n"
+            " ?]: "
+        );
+        char match[] = "Yes\n";
+        char prompt[sizeof(match)];
+        char *input_successful = fgets(prompt, sizeof(prompt), stdin);
+        if (input_successful) {
+            for (size_t idx = 0; prompt[idx] == match[idx]; idx++) {
+                if (prompt[idx] == '\0') {
+                    printf("Restarting...\n");
+                    int32_t reboot_status;
+                    int32_t rc_status;
+                    char *syu_argv[] = {
+                        "sudo", "reboot", NULL
+                    };
+                    if ((rc_status = run_command(syu_argv, &reboot_status, 0, NULL))) {
+                        printf("You will have to reboot manually\n");
+                        initramfs_mod_times_free(before_mod_times);
+                        initramfs_mod_times_free(after_mod_times);
+                        return rc_status;
+                    }
+                    int pacman_failed = WEXITSTATUS(reboot_status);
+                    if (pacman_failed) {
+                        fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: Reboot failed with exit code %d. You will have to reboot manually\n", pacman_failed);
+                        initramfs_mod_times_free(before_mod_times);
+                        initramfs_mod_times_free(after_mod_times);
+                        return 64;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    initramfs_mod_times_free(before_mod_times);
+    initramfs_mod_times_free(after_mod_times);
     return return_code;
 }
 
