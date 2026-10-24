@@ -1007,14 +1007,17 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
                 }
             }
             char **missing_pkgs = find_missing(package_names, pkg_len, found_pkg_names, pkgsc);
+            cJSON *missing_results = cJSON_CreateArray();
             printf("The following packages could not be found: ");
             for (uint32_t arri = 0; arri < pkg_len-pkgsc; arri++) {
+                cJSON_AddItemToArray(missing_results, cJSON_CreateString(missing_pkgs[arri]));
                 if (arri == pkg_len-pkgsc-1) {
                     printf("%s", missing_pkgs[arri]);
                 } else {
                     printf("%s, ", missing_pkgs[arri]);
                 }
             }
+            cJSON_AddItemToObject(parsed_response, "missingresults", missing_results);
             printf("\n");
             free(missing_pkgs);
             free(found_pkg_names);
@@ -3720,9 +3723,10 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
     for (uint32_t i = 0; i < install_idx; i++) {
         installed_names[i] = installed_pkgs[i]->name;
     }
+    // todo: use of install_count instead of install_idx for freeing installed_pkgs seems wrong. need to test if it needs to be changed.
     cJSON *response_body = find_pkg(installed_names, install_count, skip_missing, &status);
     free(installed_names);
-    if (status) {
+    if (status && status != 2) {
         cJSON_Delete(response_body);
         installed_pkg_info_array_free(installed_pkgs, install_count);
         return status;
@@ -3731,6 +3735,61 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         fprintf(stderr, "\x1b[1;31mFatal\x1b[0m: API metadata went missing.\n");
         installed_pkg_info_array_free(installed_pkgs, install_count);
         return 6;
+    }
+    if (status == 2) {
+        printf(
+            "These packages are often left over dependencies that are no longer required after a previous upgrade.\n"
+        );
+        printf("Remove these packages? [Y/n]: ");
+        int32_t removal_status = 0;
+        char prompt[6];
+        char *input_successful = fgets(prompt, sizeof(prompt), stdin);
+        if (input_successful && (prompt[0] | 32) != 'n') {
+            char *uninstall_cmd_prefix[] = {"sudo", "pacman", "-R", NULL};
+            uint32_t uninstall_args_len = 0;
+            uint32_t arg_max = sysconf(_SC_PAGE_SIZE)*sizeof(int)*CHAR_BIT-1;
+            char **uninstall_args = malloc(sizeof(void *)*arg_max);
+            for (int32_t pfx =0; uninstall_cmd_prefix[pfx] != NULL; pfx++) {
+                uninstall_args[uninstall_args_len] = uninstall_cmd_prefix[pfx];
+                uninstall_args_len++;
+            }
+            uint32_t non_dyn_uninstall_args = uninstall_args_len;
+            cJSON *missing_results = cJSON_GetObjectItemCaseSensitive(response_body, "missingresults");
+            cJSON *missing_result;
+            cJSON_ArrayForEach(missing_result, missing_results) {
+                if (missing_result->valuestring) {
+                    uninstall_args[uninstall_args_len] = missing_result->valuestring;
+                    uninstall_args_len++;
+                }
+            }
+            uninstall_args[uninstall_args_len] = NULL;
+            if (uninstall_args_len-non_dyn_uninstall_args) {
+                printf("Removing \x1b[1m%d\x1b[0m packages...\n", cJSON_GetArraySize(missing_results));
+                int32_t uninstall_info;
+                int rc_status;
+                if ((rc_status = run_command(uninstall_args, &uninstall_info, 0, NULL))) {
+                    removal_status = rc_status;
+                }
+                int install_status = WEXITSTATUS(uninstall_info);
+                if (install_status) {
+                    fprintf(stderr, "\x1b[1;31mError\x1b[0m: pacman error %d\n", install_status);
+                    removal_status = 64;
+                }
+            }
+            free(uninstall_args);
+        }
+        if (removal_status) {
+            printf("Couldn't remove all the packages!\n");
+            printf("Continue? [Y/n]: ");
+            char prompt[6];
+            char *input_successful = fgets(prompt, sizeof(prompt), stdin);
+            if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
+                cJSON_Delete(response_body);
+                installed_pkg_info_array_free(installed_pkgs, install_count);
+                return removal_status;
+            }
+        }
+
     }
     cJSON *found_packages = cJSON_GetObjectItemCaseSensitive(response_body, "results");
     if (!found_packages) {
