@@ -338,7 +338,11 @@ struct chownr_cb_args {
 static struct chownr_cb_args *chownr_args;
 
 char *error_levels[] = {
-    "\x1b[1;31mError\x1b[0m", "\x1b[1;31mFatal\x1b[0m", "\x1b[1;33mWarning\x1b[0m:", "\x1b[1;33mStopping\x1b[0m"
+    "\x1b[1;31mError\x1b[0m",
+    "\x1b[1;31mFatal\x1b[0m",
+    "\x1b[1;33mWarning\x1b[0m",
+    "\x1b[1;33mStopping\x1b[0m",
+    "\x1b[1;34mNote\x1b[0m"
 };
 
 void perror_c(const char *__s, int level) {
@@ -499,7 +503,7 @@ int run_command(char *argv[], int *command_status, int no_stop, int redirects[3]
             perror_kw("User requested to stop", argv[0], levels[0]);
         } else {
             fprintf(
-                stderr, "%s %s exited due to signal %d: %s\n",
+                stderr, "%s: %s exited due to signal %d: %s\n",
                 error_levels[levels[0]], argv[0], WTERMSIG(*command_status), strsignal(WTERMSIG(*command_status)));
         }
         return 128+WTERMSIG(*command_status);
@@ -2067,7 +2071,7 @@ uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing, in
             break;
         }
         free(baurpm_dir_buffer);
-        // extract package
+        // check if package directory exists and download
         enum pkg_dir_status dir_status = check_pkg_dir_status(pkg_base->valuestring);
         switch (dir_status) {
         case GIT_REPO:
@@ -2084,6 +2088,11 @@ uint32_t git_download_pkgs(cJSON *pkgv, uint32_t pkgc, int32_t keep_existing, in
                 break;
             }
             return_code = git_clone_pkg(pkg_base->valuestring);
+            printf(
+                "%s: Can't show diffs for \x1b[1m%s\x1b[0m as it was not previously cloned. "
+                "Please manually check diffs at https://aur.archlinux.org/cgit/aur.git/log/?h=%s\n",
+                error_levels[2], pkg_base->valuestring, pkg_base->valuestring
+            );
             break;
 
         case CHECK_ERROR:
@@ -2346,8 +2355,8 @@ int command_g(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
         }
         if (different_base) {
             printf(
-                "Note: %s has a different package base called %s.\n", 
-                pkg_info->name, pkg_info->base
+                "%s: %s has a different package base called %s.\n",
+                error_levels[4], pkg_info->name, pkg_info->base
             );
         }
         uint32_t space_size = 0;
@@ -2667,8 +2676,8 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         if (different_base) {
             printf(
-                "Note: %s has a different package base called %s.\n", 
-                pkg_info->name, pkg_info->base
+                "%s: %s has a different package base called %s.\n",
+                error_levels[4], pkg_info->name, pkg_info->base
             );
         }
         uint8_t base_match = 0;
@@ -2747,8 +2756,9 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
     }
     printf("Checking dependencies...\n");
     printf(
-        "\x1b[1;34mNote\x1b[0m: this version doesn't support nested aur dependencies. "
-        "The build process will fail if a package has aur dependencies more than 1 dependency layer deep.\n"
+        "%s: this version doesn't support nested aur dependencies. "
+        "The build process will fail if a package has aur dependencies more than 1 dependency layer deep.\n",
+        error_levels[4]
     );
     printf(
         "\x1b[1;33mWarning\x1b[0m: this version doesn't check for dependency version conflicts. "
@@ -3908,10 +3918,11 @@ int command_c(char *options, char *arguments[], int32_t arg_len, cJSON *_) {
             return 8;
         }
         secondary_timestamp = time_spec.tv_sec;
-        printf("Note: pass the s argument to skip running running pacman -Syu\n");
+        printf("%s: pass the s argument to skip running running pacman -Syu\n", error_levels[4]);
         printf(
-            "Note: If you run into package signature errors, " 
-            "try upgrading the archlinux-keyring by passing the k argument\n"
+            "%s: If you run into package signature errors, "
+            "try upgrading the archlinux-keyring by passing the k argument\n",
+            error_levels[4]
         );
         if (upgrade_keyring) {
             printf("Attempting to upgrade archlinux-keyring first to prevent signature errors...\n");
