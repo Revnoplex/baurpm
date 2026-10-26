@@ -2744,7 +2744,7 @@ int command_i(char *options, char *arguments[], int32_t arg_len, cJSON *package_
         }
         printf("Continue Installation? [Y/n]: ");
         input_successful = fgets(prompt, sizeof(prompt), stdin);
-        if (input_successful && prompt[0] != '\n' && (prompt[0] | 32) == 'n') {
+        if (!input_successful || (prompt[0] != '\n' && (prompt[0] | 32) == 'n')) {
             printf("Installation aborted\n");
             aur_pkg_info_sub_array_free(bases);
             aur_pkg_info_array_free(pkgs);
