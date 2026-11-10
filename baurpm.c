@@ -868,13 +868,18 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
 
     int32_t url_size = sizeof(AUR_BASE_URL) + sizeof(api_url_prefix) - 2 + sizeof(api_version) + sizeof(other_params)-1 + url_args_size;
     char *url_buffer = malloc(url_size+1);
-
     snprintf(url_buffer, url_size+1, "%s%s%c%s%s", AUR_BASE_URL, api_url_prefix, api_version, other_params, url_args);
     free(url_args);
 
     curl = curl_easy_init();
     if(curl) {
         curl_easy_setopt(curl, CURLOPT_URL, url_buffer);
+        
+        // including both null terminators in the count accounts for the / (forward slash)
+        int32_t user_agent_size = sizeof(SHORT_NAME) + sizeof(VERSION);
+        char *user_agent_buffer = malloc(user_agent_size);
+        snprintf(user_agent_buffer, user_agent_size, "%s/%s", SHORT_NAME, VERSION);
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, user_agent_buffer);
 
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
 
@@ -884,11 +889,12 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
     
         /* Perform the request, res gets the return code */
         res = curl_easy_perform(curl);
-        free(url_buffer);
+        free(user_agent_buffer);
         /* Check for errors */
         if (res) {
-            fprintf(stderr, "%scURL Error %d: %s\n", err_msg_prefix, res, curl_easy_strerror(res));
+            fprintf(stderr, "%scURL Error %d: %s\nEndpoint that failed: %s\n", err_msg_prefix, res, curl_easy_strerror(res), url_buffer);
             *status = 5;
+            free(url_buffer);
             curl_easy_cleanup(curl);
             return cJSON_CreateNull();
         }
@@ -898,10 +904,11 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
         if (header_error) {
             fprintf(
                 stderr, 
-                "%sFailed to get content type: cURL Error %d\n", 
-                err_msg_prefix, header_error
+                "%sFailed to get content type: cURL Error %d\nEndpoint that failed: %s\n", 
+                err_msg_prefix, header_error, url_buffer
             );
             curl_easy_cleanup(curl);
+            free(url_buffer);
             free(chunk.response);
             *status = 5;
             return cJSON_CreateNull();
@@ -912,15 +919,18 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
                 long response_code;
                 curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
                 if (response_code >= 400) {
-                    fprintf(stderr, "%sHTTP Error %ld\n", err_msg_prefix, response_code);
+                    fprintf(stderr, "%sHTTP Error %ld\nEndpoint that failed: %s\n", err_msg_prefix, response_code, url_buffer);
                     *status = 5;
                     curl_easy_cleanup(curl);
+                    free(url_buffer);
                     free(chunk.response);
                     return cJSON_CreateNull();
                 }
-                fprintf(stderr, "%sExcpected a %s response, got a %s response instead.\n", err_msg_prefix, type_match, content_type->value);
+                fprintf(stderr, "%sExcpected a %s response, got a %s response instead.\nEndpoint that failed: %s\n", err_msg_prefix, type_match, content_type->value, url_buffer);
+                fprintf(stderr, "This is most likely a block anubis due to the AUR changing its policy around automated programs.\nPlease report this issue on github (if there isn't already one) at https://github.com/Revnoplex/baurpm/issues/\n");
                 curl_easy_cleanup(curl);
                 free(chunk.response);
+                free(url_buffer);
                 *status = 6;
                 return cJSON_CreateNull();
             }
@@ -930,11 +940,12 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
         if (parsed_response == NULL) {
             const char *error_ptr = cJSON_GetErrorPtr();
             if (error_ptr) {
-                fprintf(stderr, "%scJSON Error: parsing error around char %lu\n", err_msg_prefix, error_ptr-chunk.response);
+                fprintf(stderr, "%scJSON Error: parsing error around char %lu\nEndpoint that failed: %s\n", err_msg_prefix, error_ptr-chunk.response, url_buffer);
             } else {
-                fprintf(stderr, "%scJSON Error", err_msg_prefix);
+                fprintf(stderr, "%scJSON Error\nEndpoint that failed: %s\n", err_msg_prefix, url_buffer);
             }
             curl_easy_cleanup(curl);
+            free(url_buffer);
             free(chunk.response);
             *status = 7;
             return cJSON_CreateNull();
@@ -952,7 +963,8 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
             aur_response_type = aur_response_type_key->valuestring;
         } else {
             *status = 6;
-            fprintf(stderr, "%sMissing JSON key in API response: 'type'\n", err_msg_prefix);
+            fprintf(stderr, "%sMissing JSON key in API response: 'type'\nEndpoint that failed: %s\n", err_msg_prefix, url_buffer);
+            free(url_buffer);
             return parsed_response;
         }
 
@@ -962,27 +974,30 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
                 if (err_idx == sizeof(error_match)-1) {
                     cJSON *error_key = cJSON_GetObjectItemCaseSensitive(parsed_response, "error");
                     if (error_key && error_key->valuestring) {
-                        fprintf(stderr, "%sAURWEB RPC Error: %s\n", err_msg_prefix, error_key->valuestring);
+                        fprintf(stderr, "%sAURWEB RPC Error: %s\nEndpoint that failed: %s\n", err_msg_prefix, error_key->valuestring, url_buffer);
                     } else {
-                        fprintf(stderr, "%sAURWEB RPC Error\n", err_msg_prefix);
+                        fprintf(stderr, "%sAURWEB RPC Error\nEndpoint that failed: %s\n", err_msg_prefix, url_buffer);
                     }
                     *status = 5;
+                    free(url_buffer);
                     return parsed_response;
                 }
             }
-            fprintf(stderr, "%sHTTP Error %ld\n", err_msg_prefix, response_code);
+            fprintf(stderr, "%sHTTP Error %ld\nEndpoint that failed: %s\n", err_msg_prefix, response_code, url_buffer);
             *status = 5;
+            free(url_buffer);
             return parsed_response;
         }
         for (uint8_t err_idx = 0; aur_response_type[err_idx] == error_match[err_idx]; err_idx++) {
             if (err_idx == sizeof(error_match)-1) {
                 cJSON *error_key = cJSON_GetObjectItemCaseSensitive(parsed_response, "error");
                 if (error_key && error_key->valuestring) {
-                    fprintf(stderr, "%sAURWEB RPC Error: %s\n", err_msg_prefix, error_key->valuestring);
+                    fprintf(stderr, "%sAURWEB RPC Error: %s\nEndpoint that failed: %s\n", err_msg_prefix, error_key->valuestring, url_buffer);
                 } else {
-                    fprintf(stderr, "%sAURWEB RPC Error\n", err_msg_prefix);
+                    fprintf(stderr, "%sAURWEB RPC Error\nEndpoint that failed: %s\n", err_msg_prefix, url_buffer);
                 }
                 *status = 5;
+                free(url_buffer);
                 return parsed_response;
             }
         }
@@ -992,7 +1007,8 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
             result_count = result_count_key->valueint;
         } else {
             *status = 6;
-            fprintf(stderr, "%sMissing JSON key in API response: 'resultcount'\n", err_msg_prefix);
+            fprintf(stderr, "%sMissing JSON key in API response: 'resultcount'\nEndpoint that failed: %s\n", err_msg_prefix, url_buffer);
+            free(url_buffer);
             return parsed_response;
         }
         if (result_count < pkg_len && !ignore_missing) {
@@ -1025,9 +1041,12 @@ cJSON *find_pkg(char *package_names[], int32_t pkg_len, uint8_t ignore_missing, 
             printf("\n");
             free(missing_pkgs);
             free(found_pkg_names);
+            free(url_buffer);
             return parsed_response;
+            
         }
         *status = 0;
+        free(url_buffer);
         return parsed_response;
     }
     free(url_buffer);
