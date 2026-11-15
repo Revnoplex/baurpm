@@ -4214,13 +4214,20 @@ int main(int32_t argc, char *argv[]) {
         uint8_t n_matches;
         char *match = "help";
         for (n_matches = 0; n_matches < 4; n_matches++) {
-            if (command_arg[n_matches] != match[n_matches]) {
+            if ((command_arg[n_matches] | 32) != match[n_matches]) {
                 break;
             }
         }
-        if (n_matches == 4) {
+        if (n_matches == 4 || ((command_arg[0] | 32) == 'h' && command_arg[1] == '\0')) {
             command_arg = "-H";
+        } else {
+            fprintf(stderr,
+                "Invalid Argument!\nUsage: %s [command][options] [arguments]\nSee %s -H for details\n", 
+                SHORT_NAME, SHORT_NAME
+            );
+            return 1;
         }
+
     }
     char **command_args = malloc((argc-2)*sizeof(void *));
     if (argc > 2) {
@@ -4251,12 +4258,18 @@ int main(int32_t argc, char *argv[]) {
                 return_code = commands[cmd_idx].callback(cmd_opts, command_args, argc-2, cJSON_CreateNull());
                 free(command_args);
                 break;
-            } else if (cmd_idx == 6) {
+            } else if (cmd_idx == ARRAY_SIZE(commands)-1) {
                 fprintf(stderr, "%s: command \"%c\" not found\n", SHORT_NAME, cmd_name);
                 return_code = 2;
             }
             
         }
+    } else if (command_arg[0] == '-' && command_arg[1] == '\0') {
+        fprintf(stderr,
+            "Invalid Argument!\nUsage: %s [command][options] [arguments]\nSee %s -H for details\n", 
+            SHORT_NAME, SHORT_NAME
+        );
+        return 1;
     }
     return return_code;
 }
